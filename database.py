@@ -659,20 +659,3 @@ class Database:
 # ==================== Instance ====================
 
 db = Database()
-```
-
----
-
-### وعدل `handlers/archive.py` - سطر واحد فقط
-
-**ابحث عن:**
-```python
-async with db.pool.acquire() as conn:
-    await conn.execute(
-        "DELETE FROM messages WHERE archive_id = $1",
-        archive_id
-    )
-    await conn.execute(
-        "DELETE FROM archives WHERE id = $1",
-        archive_id
-    )
