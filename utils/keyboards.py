@@ -1,244 +1,295 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+import telebot
+from telebot.types import (
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from config import config
 
 
-def make_button(text: str, callback_data: str = None,
-                url: str = None) -> InlineKeyboardButton:
+# ==================== دالة مساعدة ====================
+
+def btn(text: str,
+        callback_data: str = None,
+        url: str = None) -> InlineKeyboardButton:
     """إنشاء زر"""
     if url:
         return InlineKeyboardButton(text, url=url)
-    return InlineKeyboardButton(text, callback_data=callback_data)
+    return InlineKeyboardButton(
+        text, callback_data=callback_data
+    )
+
+
+def kb(*rows) -> InlineKeyboardMarkup:
+    """إنشاء لوحة أزرار"""
+    markup = InlineKeyboardMarkup()
+    for row in rows:
+        if isinstance(row, list):
+            markup.row(*row)
+        else:
+            markup.row(row)
+    return markup
+
+
+# ==================== القائمة الرئيسية ====================
+
+def main_menu_keyboard(
+        is_logged_in: bool = False) -> InlineKeyboardMarkup:
+    if is_logged_in:
+        return kb(
+            [
+                btn("📢 قنواتي",    "show_channels"),
+                btn("👥 مجموعاتي", "show_groups"),
+            ],
+            [
+                btn("📦 أرشيفي",     "show_archives"),
+                btn("📊 إحصائياتي", "show_stats"),
+            ],
+            [
+                btn("🔍 بحث",     "search"),
+                btn("⚙️ إعدادات", "settings"),
+            ],
+            [
+                btn("👑 المطور", "developer"),
+                btn("🚪 خروج",   "logout"),
+            ],
+        )
+    return kb(
+        [btn("🚀 تسجيل الدخول", "login")],
+        [btn("❓ مساعدة",        "help")],
+        [btn(
+            f"👑 {config.DEVELOPER_NAME} | "
+            f"{config.DEVELOPER_USERNAME}",
+            "developer"
+        )],
+    )
 
 
 # ==================== تسجيل الدخول ====================
 
 def login_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
-        [make_button("🚀 تسجيل الدخول", "login")],
-        [make_button("❓ مساعدة", "help")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    return kb(
+        [btn("🚀 تسجيل الدخول", "login")],
+        [btn("❓ مساعدة", "help")],
+    )
 
 
 def cancel_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
-        [make_button("❌ إلغاء", "cancel")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    return kb(
+        [btn("❌ إلغاء", "cancel")],
+    )
 
 
-# ==================== القائمة الرئيسية ====================
-
-def main_menu_keyboard(is_logged_in: bool = False) -> InlineKeyboardMarkup:
-    if is_logged_in:
-        keyboard = [
-            [
-                make_button("📋 قنواتي", "show_channels"),
-                make_button("👥 مجموعاتي", "show_groups"),
-            ],
-            [
-                make_button("📦 أرشيفي", "show_archives"),
-                make_button("📊 إحصائياتي", "show_stats"),
-            ],
-            [
-                make_button("🔍 بحث", "search"),
-                make_button("⚙️ إعدادات", "settings"),
-            ],
-            [make_button("🚪 تسجيل الخروج", "logout")],
-        ]
-    else:
-        keyboard = [
-            [make_button("🚀 تسجيل الدخول", "login")],
-            [make_button("❓ مساعدة", "help")],
-        ]
-    return InlineKeyboardMarkup(keyboard)
+def confirm_keyboard(
+        action: str) -> InlineKeyboardMarkup:
+    return kb(
+        [
+            btn("✅ تأكيد", f"confirm_{action}"),
+            btn("❌ إلغاء", "cancel"),
+        ],
+    )
 
 
-# ==================== القنوات والمجموعات ====================
+# ==================== القنوات ====================
 
-def chats_keyboard(chats: list, chat_type: str,
-                   page: int = 0,
-                   per_page: int = 8) -> InlineKeyboardMarkup:
-    """عرض القنوات أو المجموعات مع pagination"""
-    keyboard = []
+def chat_type_keyboard() -> InlineKeyboardMarkup:
+    return kb(
+        [
+            btn("📢 القنوات",    "show_channels"),
+            btn("👥 المجموعات", "show_groups"),
+        ],
+        [
+            btn("💬 المحادثات",  "show_private"),
+            btn("📦 الكل",       "show_all_chats"),
+        ],
+        [btn("🔙 رجوع", "main_menu")],
+    )
+
+
+def chats_keyboard(
+        chats: list,
+        chat_type: str,
+        page: int = 0,
+        per_page: int = 8) -> InlineKeyboardMarkup:
+    """عرض القنوات مع pagination"""
+    markup = InlineKeyboardMarkup()
 
     start = page * per_page
     end = start + per_page
-    current_chats = chats[start:end]
+    current = chats[start:end]
 
-    for i, chat in enumerate(current_chats):
+    for i, chat in enumerate(current):
         real_index = start + i
         icon = "📢" if chat_type == "channel" else "👥"
         name = chat.get("title", "بدون اسم")
         members = chat.get("members_count", 0)
 
-        keyboard.append([
-            make_button(
-                f"{icon} {name} ({members:,})",
-                f"select_chat_{chat_type}_{real_index}"
-            )
-        ])
+        markup.row(btn(
+            f"{icon} {name} ({format_num(members)})",
+            f"select_chat_{chat_type}_{real_index}"
+        ))
 
-    # أزرار التنقل
-    nav_buttons = []
+    nav = []
     if page > 0:
-        nav_buttons.append(
-            make_button("⬅️ السابق", f"page_{chat_type}_{page-1}")
-        )
+        nav.append(btn(
+            "⬅️ السابق",
+            f"page_{chat_type}_{page-1}"
+        ))
     if end < len(chats):
-        nav_buttons.append(
-            make_button("التالي ➡️", f"page_{chat_type}_{page+1}")
-        )
-    if nav_buttons:
-        keyboard.append(nav_buttons)
+        nav.append(btn(
+            "التالي ➡️",
+            f"page_{chat_type}_{page+1}"
+        ))
+    if nav:
+        markup.row(*nav)
 
-    keyboard.append([make_button("🔙 رجوع", "main_menu")])
-
-    return InlineKeyboardMarkup(keyboard)
-
-
-def chat_type_keyboard() -> InlineKeyboardMarkup:
-    """اختيار نوع المحادثة"""
-    keyboard = [
-        [
-            make_button("📢 القنوات", "show_channels"),
-            make_button("👥 المجموعات", "show_groups"),
-        ],
-        [
-            make_button("💬 المحادثات", "show_private"),
-            make_button("📦 الكل", "show_all_chats"),
-        ],
-        [make_button("🔙 رجوع", "main_menu")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    markup.row(btn("🔙 رجوع", "main_menu"))
+    return markup
 
 
-# ==================== اختيار المحتوى ====================
+def format_num(n: int) -> str:
+    if n >= 1000000:
+        return f"{n/1000000:.1f}M"
+    if n >= 1000:
+        return f"{n/1000:.1f}K"
+    return str(n)
+
+
+# ==================== المحتوى ====================
 
 def content_type_keyboard() -> InlineKeyboardMarkup:
-    """اختيار نوع المحتوى المراد جلبه"""
-    keyboard = [
+    return kb(
         [
-            make_button("📝 النصوص",      "content_text"),
-            make_button("🖼️ الصور",       "content_photos"),
+            btn("📝 النصوص",      "content_text"),
+            btn("🖼️ الصور",       "content_photos"),
         ],
         [
-            make_button("🎥 الفيديوهات",  "content_videos"),
-            make_button("📁 الملفات",     "content_files"),
+            btn("🎥 الفيديوهات",  "content_videos"),
+            btn("📁 الملفات",     "content_files"),
         ],
         [
-            make_button("🎵 الصوتيات",    "content_audio"),
-            make_button("🎤 الرسائل الصوتية", "content_voice"),
+            btn("🎵 الصوتيات",        "content_audio"),
+            btn("🎤 رسائل صوتية",     "content_voice"),
         ],
         [
-            make_button("🎭 الملصقات",    "content_stickers"),
-            make_button("📦 كل المحتوى", "content_all"),
+            btn("🎭 الملصقات",    "content_stickers"),
+            btn("📦 كل المحتوى", "content_all"),
         ],
-        [make_button("🔙 رجوع", "main_menu")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+        [btn("🔙 رجوع", "main_menu")],
+    )
 
 
 # ==================== حدود الجلب ====================
 
 def fetch_limit_keyboard() -> InlineKeyboardMarkup:
-    """اختيار عدد الرسائل"""
-    keyboard = [
+    return kb(
         [
-            make_button("🔟 آخر 10",   "limit_10"),
-            make_button("5️⃣0️⃣ آخر 50",  "limit_50"),
+            btn("🔟 آخر 10",    "limit_10"),
+            btn("5️⃣0️⃣ آخر 50",  "limit_50"),
         ],
         [
-            make_button("💯 آخر 100",  "limit_100"),
-            make_button("5️⃣0️⃣0️⃣ آخر 500", "limit_500"),
+            btn("💯 آخر 100",   "limit_100"),
+            btn("5️⃣0️⃣0️⃣ آخر 500", "limit_500"),
         ],
         [
-            make_button("🔢 آخر 1000", "limit_1000"),
-            make_button("♾️ الكل ⚠️",  "limit_0"),
+            btn("🔢 آخر 1000",  "limit_1000"),
+            btn("♾️ الكل ⚠️",   "limit_0"),
         ],
-        [make_button("🔙 رجوع", "main_menu")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+        [btn("🔙 رجوع", "main_menu")],
+    )
 
 
 # ==================== خيارات إضافية ====================
 
-def extra_options_keyboard() -> InlineKeyboardMarkup:
-    """خيارات إضافية قبل الجلب"""
-    keyboard = [
+def extra_options_keyboard(
+        options: dict = None) -> InlineKeyboardMarkup:
+    if options is None:
+        options = {}
+
+    def status(key):
+        return "✅" if options.get(key) else "☑️"
+
+    return kb(
         [
-            make_button("🤖 تلخيص AI",     "opt_ai_summary"),
-            make_button("🏷️ تصنيف AI",     "opt_ai_category"),
+            btn(
+                f"{status('ai_summary')} تلخيص AI",
+                "opt_ai_summary"
+            ),
+            btn(
+                f"{status('ai_category')} تصنيف AI",
+                "opt_ai_category"
+            ),
         ],
         [
-            make_button("🎙️ تحويل صوت لنص", "opt_voice_to_text"),
-            make_button("🔍 تجنب التكرار",  "opt_no_duplicate"),
+            btn(
+                f"{status('voice_to_text')} تحويل صوت",
+                "opt_voice_to_text"
+            ),
+            btn(
+                f"{status('no_duplicate')} تجنب التكرار",
+                "opt_no_duplicate"
+            ),
         ],
         [
-            make_button("📅 تصفية بالتاريخ", "opt_date_filter"),
-            make_button("🔤 تصفية بكلمة",   "opt_keyword_filter"),
+            btn(
+                f"{status('smart_extract')} استخراج ذكي",
+                "opt_smart_extract"
+            ),
+            btn(
+                f"{status('save_txt')} حفظ كـ TXT",
+                "opt_save_txt"
+            ),
         ],
         [
-            make_button("✅ بدء الجلب", "start_fetch"),
-            make_button("❌ إلغاء",     "cancel"),
+            btn("▶️ بدء الجلب", "start_fetch"),
+            btn("❌ إلغاء",      "cancel"),
         ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    )
 
 
-# ==================== التأكيد ====================
-
-def confirm_keyboard(action: str = "confirm") -> InlineKeyboardMarkup:
-    keyboard = [
+def confirm_fetch_keyboard() -> InlineKeyboardMarkup:
+    return kb(
         [
-            make_button("✅ تأكيد",  f"confirm_{action}"),
-            make_button("❌ إلغاء", "cancel"),
+            btn("✅ تأكيد الحفظ",    "confirm_save"),
+            btn("❌ إلغاء",           "cancel"),
         ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def confirm_fetch_keyboard(stats: dict) -> InlineKeyboardMarkup:
-    """تأكيد الجلب مع إحصائيات"""
-    keyboard = [
-        [
-            make_button("✅ تأكيد الحفظ", "confirm_save"),
-            make_button("❌ إلغاء",        "cancel"),
-        ],
-        [make_button("🔙 تغيير الخيارات", "back_to_options")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+        [btn("🔙 تغيير الخيارات", "back_to_options")],
+    )
 
 
 # ==================== الأرشيف ====================
 
-def archive_keyboard(archive_id: int) -> InlineKeyboardMarkup:
-    keyboard = [
+def archive_keyboard(
+        archive_id: int) -> InlineKeyboardMarkup:
+    return kb(
         [
-            make_button("📝 النصوص",   f"arch_text_{archive_id}"),
-            make_button("🖼️ الصور",    f"arch_photos_{archive_id}"),
+            btn("📝 النصوص",   f"arch_text_{archive_id}"),
+            btn("🖼️ الصور",    f"arch_photos_{archive_id}"),
         ],
         [
-            make_button("🎥 الفيديو",  f"arch_videos_{archive_id}"),
-            make_button("📁 الملفات",  f"arch_files_{archive_id}"),
+            btn("🎥 الفيديو",  f"arch_videos_{archive_id}"),
+            btn("📁 الملفات",  f"arch_files_{archive_id}"),
         ],
         [
-            make_button("🤖 تحليل AI", f"arch_ai_{archive_id}"),
-            make_button("📊 إحصائيات", f"arch_stats_{archive_id}"),
+            btn("🤖 تحليل AI",  f"arch_ai_{archive_id}"),
+            btn("📊 إحصائيات", f"arch_stats_{archive_id}"),
         ],
         [
-            make_button("📤 تصدير ZIP", f"arch_export_{archive_id}"),
-            make_button("🗑️ حذف",       f"arch_delete_{archive_id}"),
+            btn("📤 تصدير TXT", f"arch_txt_{archive_id}"),
+            btn("📦 تصدير ZIP", f"arch_zip_{archive_id}"),
         ],
-        [make_button("🔙 رجوع", "show_archives")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+        [
+            btn("🔍 استخراج ذكي", f"arch_extract_{archive_id}"),
+            btn("🗑️ حذف",          f"arch_delete_{archive_id}"),
+        ],
+        [btn("🔙 رجوع", "show_archives")],
+    )
 
 
-def archives_list_keyboard(archives: list,
-                           page: int = 0,
-                           per_page: int = 5) -> InlineKeyboardMarkup:
-    keyboard = []
+def archives_list_keyboard(
+        archives: list,
+        page: int = 0,
+        per_page: int = 5) -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup()
 
     start = page * per_page
     end = start + per_page
@@ -252,180 +303,241 @@ def archives_list_keyboard(archives: list,
             "failed":    "❌",
         }.get(archive.get("status", ""), "📦")
 
-        keyboard.append([
-            make_button(
-                f"{status_icon} {archive.get('chat_title', 'بدون اسم')} "
-                f"({archive.get('fetched_messages', 0):,} رسالة)",
-                f"view_archive_{archive.get('id')}"
-            )
-        ])
+        markup.row(btn(
+            f"{status_icon} "
+            f"{archive.get('chat_title', '')[:20]} "
+            f"({format_num(archive.get('fetched_messages', 0))})",
+            f"view_archive_{archive.get('id')}"
+        ))
 
-    nav_buttons = []
+    nav = []
     if page > 0:
-        nav_buttons.append(
-            make_button("⬅️ السابق", f"archives_page_{page-1}")
-        )
+        nav.append(btn(
+            "⬅️ السابق",
+            f"archives_page_{page-1}"
+        ))
     if end < len(archives):
-        nav_buttons.append(
-            make_button("التالي ➡️", f"archives_page_{page+1}")
-        )
-    if nav_buttons:
-        keyboard.append(nav_buttons)
+        nav.append(btn(
+            "التالي ➡️",
+            f"archives_page_{page+1}"
+        ))
+    if nav:
+        markup.row(*nav)
 
-    keyboard.append([make_button("🔙 رجوع", "main_menu")])
-
-    return InlineKeyboardMarkup(keyboard)
+    markup.row(btn("🔙 رجوع", "main_menu"))
+    return markup
 
 
 # ==================== البحث ====================
 
 def search_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
+    return kb(
         [
-            make_button("🔤 بحث بالنص",      "search_text"),
-            make_button("📅 بحث بالتاريخ",   "search_date"),
+            btn("🔤 بحث بالنص",    "search_text"),
+            btn("📅 بحث بالتاريخ", "search_date"),
         ],
         [
-            make_button("🖼️ بحث بالنوع",     "search_type"),
-            make_button("📢 بحث بالقناة",    "search_chat"),
+            btn("🖼️ بحث بالنوع",  "search_type"),
+            btn("📢 بحث بالقناة", "search_chat"),
         ],
-        [make_button("🔙 رجوع", "main_menu")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+        [
+            btn("🌐 بحث في الكل", "search_all"),
+        ],
+        [btn("🔙 رجوع", "main_menu")],
+    )
 
 
 # ==================== الإعدادات ====================
 
-def settings_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
+def settings_keyboard(
+        settings: dict = None) -> InlineKeyboardMarkup:
+    if settings is None:
+        settings = {}
+
+    def status(key):
+        val = settings.get(key, True)
+        return "✅" if val else "❌"
+
+    return kb(
         [
-            make_button("🤖 إعدادات AI",        "settings_ai"),
-            make_button("📥 إعدادات التحميل",   "settings_download"),
+            btn(
+                f"{status('smart_filter')} تصفية ذكية",
+                "setting_smart_filter"
+            ),
+            btn(
+                f"{status('extract_cards')} استخراج بطاقات",
+                "setting_extract_cards"
+            ),
         ],
         [
-            make_button("🔔 إعدادات التنبيهات", "settings_alerts"),
-            make_button("🌍 اللغة",              "settings_language"),
+            btn(
+                f"{status('extract_phones')} استخراج هواتف",
+                "setting_extract_phones"
+            ),
+            btn(
+                f"{status('extract_emails')} استخراج إيميلات",
+                "setting_extract_emails"
+            ),
         ],
-        [make_button("🔙 رجوع", "main_menu")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+        [
+            btn(
+                f"{status('extract_urls')} استخراج روابط",
+                "setting_extract_urls"
+            ),
+            btn(
+                f"{status('ai_summary')} تلخيص AI",
+                "setting_ai_summary"
+            ),
+        ],
+        [
+            btn(
+                f"{status('voice_to_text')} تحويل صوت لنص",
+                "setting_voice_to_text"
+            ),
+            btn(
+                f"{status('save_txt')} حفظ كـ TXT دائماً",
+                "setting_save_txt"
+            ),
+        ],
+        [btn("🔙 رجوع", "main_menu")],
+    )
+
+
+# ==================== الإحصائيات ====================
+
+def stats_keyboard() -> InlineKeyboardMarkup:
+    return kb(
+        [
+            btn("📊 مفصلة",   "stats_detailed"),
+            btn("📅 أسبوعي",  "stats_weekly"),
+        ],
+        [
+            btn("💾 التخزين", "stats_storage"),
+            btn("📈 مقارنة",  "stats_compare"),
+        ],
+        [btn("🗑️ تنظيف", "cleanup_storage")],
+        [btn("🔙 رجوع",  "main_menu")],
+    )
 
 
 # ==================== لوحة الأدمن ====================
 
 def admin_panel_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
+    return kb(
         [
-            make_button("👥 المستخدمين",    "admin_users"),
-            make_button("📊 الإحصائيات",   "admin_stats"),
+            btn("👥 المستخدمين",   "admin_users"),
+            btn("📊 الإحصائيات",  "admin_stats"),
         ],
         [
-            make_button("📦 الأرشيفات",    "admin_archives"),
-            make_button("📋 السجلات",      "admin_logs"),
+            btn("📦 الأرشيفات",   "admin_archives"),
+            btn("📋 السجلات",     "admin_logs"),
         ],
         [
-            make_button("⚙️ إعدادات البوت", "admin_settings"),
-            make_button("📢 إرسال للكل",   "admin_broadcast"),
+            btn("⚙️ إعدادات البوت", "admin_settings"),
+            btn("📢 إرسال للكل",    "admin_broadcast"),
         ],
-        [make_button("🔙 رجوع", "main_menu")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def admin_user_keyboard(user_id: int,
-                        is_banned: bool = False) -> InlineKeyboardMarkup:
-    ban_button = (
-        make_button("✅ رفع الحظر", f"admin_unban_{user_id}")
-        if is_banned else
-        make_button("🚫 حظر",      f"admin_ban_{user_id}")
+        [btn("🔙 رجوع", "main_menu")],
     )
-    keyboard = [
-        [
-            ban_button,
-            make_button("📊 إحصائياته", f"admin_user_stats_{user_id}"),
-        ],
-        [
-            make_button("📋 سجل نشاطه", f"admin_user_log_{user_id}"),
-            make_button("🗑️ حذف بياناته", f"admin_delete_user_{user_id}"),
-        ],
-        [make_button("🔙 رجوع", "admin_users")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
 
 
 # ==================== لوحة المالك ====================
 
 def owner_panel_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
+    return kb(
         [
-            make_button("👑 إدارة الأدمنية",   "owner_admins"),
-            make_button("👥 إدارة المستخدمين", "owner_users"),
+            btn("👑 الأدمنية",        "owner_admins"),
+            btn("👥 المستخدمين",      "owner_users"),
         ],
         [
-            make_button("📊 إحصائيات كاملة",  "owner_stats"),
-            make_button("📋 سجل كامل",        "owner_logs"),
+            btn("📊 إحصائيات كاملة", "owner_stats"),
+            btn("📋 سجل كامل",       "owner_logs"),
         ],
         [
-            make_button("⚙️ إعدادات البوت",   "owner_settings"),
-            make_button("🔄 إعادة تشغيل",     "owner_restart"),
+            btn("⚙️ إعدادات",        "owner_settings"),
+            btn("🔄 إعادة تشغيل",    "owner_restart"),
         ],
         [
-            make_button("📢 إرسال للكل",      "owner_broadcast"),
-            make_button("🗑️ تنظيف البيانات",  "owner_cleanup"),
+            btn("📢 إرسال للكل",     "owner_broadcast"),
+            btn("🗑️ تنظيف",          "owner_cleanup"),
         ],
-        [make_button("🔙 رجوع", "main_menu")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+        [btn("🔙 رجوع", "main_menu")],
+    )
 
 
-def admins_list_keyboard(admins: list) -> InlineKeyboardMarkup:
-    keyboard = []
+def admins_list_keyboard(
+        admins: list) -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup()
 
     for admin in admins:
-        name = admin.get("full_name") or admin.get("username", "بدون اسم")
-        keyboard.append([
-            make_button(
-                f"👤 {name}",
-                f"owner_admin_{admin.get('telegram_id')}"
-            )
-        ])
+        name = (
+            admin.get("full_name") or
+            admin.get("username", "بدون اسم")
+        )
+        markup.row(btn(
+            f"👤 {name}",
+            f"owner_admin_{admin.get('telegram_id')}"
+        ))
 
-    keyboard.append([make_button("➕ إضافة أدمن", "owner_add_admin")])
-    keyboard.append([make_button("🔙 رجوع",        "owner_panel")])
+    markup.row(btn("➕ إضافة أدمن", "owner_add_admin"))
+    markup.row(btn("🔙 رجوع",        "owner_panel"))
+    return markup
 
-    return InlineKeyboardMarkup(keyboard)
 
-
-def admin_manage_keyboard(admin_id: int) -> InlineKeyboardMarkup:
-    keyboard = [
+def admin_manage_keyboard(
+        admin_id: int) -> InlineKeyboardMarkup:
+    return kb(
         [
-            make_button("✏️ تعديل الصلاحيات", f"owner_edit_admin_{admin_id}"),
-            make_button("🗑️ إزالة",            f"owner_remove_admin_{admin_id}"),
+            btn(
+                "✏️ تعديل الصلاحيات",
+                f"owner_edit_admin_{admin_id}"
+            ),
+            btn(
+                "🗑️ إزالة",
+                f"owner_remove_admin_{admin_id}"
+            ),
         ],
-        [make_button("🔙 رجوع", "owner_admins")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+        [btn("🔙 رجوع", "owner_admins")],
+    )
 
 
-# ==================== التنبيهات ====================
-
-def alerts_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
-        [make_button("➕ إضافة تنبيه جديد", "alert_add")],
-        [make_button("📋 تنبيهاتي",          "alert_list")],
-        [make_button("🔙 رجوع",              "settings")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+def admin_user_keyboard(
+        user_id: int,
+        is_banned: bool = False) -> InlineKeyboardMarkup:
+    ban_btn = (
+        btn("✅ رفع الحظر", f"admin_unban_{user_id}")
+        if is_banned else
+        btn("🚫 حظر",       f"admin_ban_{user_id}")
+    )
+    return kb(
+        [
+            ban_btn,
+            btn("📊 إحصائياته", f"admin_user_stats_{user_id}"),
+        ],
+        [
+            btn("📋 سجل نشاطه",   f"admin_user_log_{user_id}"),
+            btn("🗑️ حذف بياناته", f"admin_delete_user_{user_id}"),
+        ],
+        [btn("🔙 رجوع", "admin_users")],
+    )
 
 
 # ==================== مساعدة ====================
 
 def help_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
+    return kb(
         [
-            make_button("📖 كيفية الاستخدام", "help_usage"),
-            make_button("❓ الأسئلة الشائعة", "help_faq"),
+            btn("📖 كيفية الاستخدام", "help_usage"),
+            btn("❓ الأسئلة الشائعة",  "help_faq"),
         ],
-        [make_button("🔙 رجوع", "main_menu")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+        [btn("🔙 رجوع", "main_menu")],
+    )
+
+
+# ==================== التنبيهات ====================
+
+def alerts_keyboard() -> InlineKeyboardMarkup:
+    return kb(
+        [btn("➕ إضافة تنبيه", "alert_add")],
+        [btn("📋 تنبيهاتي",    "alert_list")],
+        [btn("🔙 رجوع",        "settings")],
+    )
