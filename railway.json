@@ -3,7 +3,7 @@
         "builder": "NIXPACKS"
     },
     "deploy": {
-        "startCommand": "python main.py",
+        "startCommand": "python test.py",
         "restartPolicyType": "ON_FAILURE",
         "restartPolicyMaxRetries": 10
     }
