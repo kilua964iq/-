@@ -11,6 +11,10 @@ from utils.helpers import (
     format_size,
     safe_filename,
     get_download_path,
+    save_as_txt,
+    smart_extract,
+    format_extracted_data,
+    clean_text,
 )
 
 
@@ -21,18 +25,17 @@ class DownloadManager:
 
     def __init__(self):
         self.active_downloads = {}
-        self.download_stats = {}
 
     # ==================== حفظ النصوص ====================
 
-    async def save_text(
+    async def save_text_as_file(
             self,
             owner_id: int,
             chat_id: int,
             message_id: int,
             text: str,
             date: datetime = None) -> Optional[str]:
-        """حفظ نص رسالة"""
+        """حفظ نص رسالة كملف"""
         try:
             folder = os.path.join(
                 config.DOWNLOAD_PATH,
@@ -60,7 +63,7 @@ class DownloadManager:
 
         except Exception as e:
             error_logger.log_exception(
-                e, "save_text", owner_id
+                e, "save_text_as_file", owner_id
             )
             return None
 
@@ -75,7 +78,6 @@ class DownloadManager:
             media_type: str) -> Optional[str]:
         """حفظ ملف ميديا"""
         try:
-            # التحقق من الحجم
             size_mb = len(file_data) / (1024 * 1024)
             if size_mb > config.MAX_DOWNLOAD_SIZE:
                 bot_logger.warning(
@@ -94,17 +96,14 @@ class DownloadManager:
             safe_name = safe_filename(file_name)
             file_path = os.path.join(folder, safe_name)
 
-            # تجنب التكرار
             if os.path.exists(file_path):
                 return file_path
 
-            async with aiofiles.open(file_path, "wb") as f:
+            async with aiofiles.open(
+                file_path, "wb"
+            ) as f:
                 await f.write(file_data)
 
-            bot_logger.debug(
-                f"✅ تم حفظ {safe_name} "
-                f"({format_size(len(file_data))})"
-            )
             return file_path
 
         except Exception as e:
@@ -113,76 +112,207 @@ class DownloadManager:
             )
             return None
 
-    # ==================== تحميل متوازي ====================
+    # ==================== تصدير TXT ====================
 
-    async def download_multiple(
+    async def export_messages_as_txt(
             self,
-            tasks: List[dict],
-            max_concurrent: int = 3,
-            progress_callback=None) -> List[dict]:
-        """تحميل عدة ملفات بشكل متوازي"""
+            owner_id: int,
+            archive_id: int,
+            chat_title: str,
+            messages: list,
+            extract_smart: bool = False) -> Optional[str]:
+        """تصدير الرسائل كملف TXT"""
+        try:
+            folder = os.path.join(
+                config.DOWNLOAD_PATH,
+                "txt",
+                str(owner_id)
+            )
+            os.makedirs(folder, exist_ok=True)
 
-        semaphore = asyncio.Semaphore(max_concurrent)
-        results = []
-        completed = 0
+            timestamp = datetime.now().strftime(
+                "%Y%m%d_%H%M%S"
+            )
+            safe_title = safe_filename(chat_title)
+            file_name  = (
+                f"{safe_title}_{archive_id}"
+                f"_{timestamp}.txt"
+            )
+            file_path = os.path.join(folder, file_name)
 
-        async def download_one(task: dict) -> dict:
-            nonlocal completed
-            async with semaphore:
-                try:
-                    result = await self._process_download(task)
-                    completed += 1
+            content = (
+                f"{'=' * 50}\n"
+                f"القناة: {chat_title}\n"
+                f"الأرشيف: {archive_id}\n"
+                f"التاريخ: "
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"عدد الرسائل: {len(messages)}\n"
+                f"{'=' * 50}\n\n"
+            )
 
-                    if progress_callback:
-                        await progress_callback(
-                            completed,
-                            len(tasks)
+            for i, msg in enumerate(messages, 1):
+                text = msg.get("text", "") or ""
+                date = msg.get("date", "")
+
+                if not text:
+                    continue
+
+                content += f"[{i}] {date}\n"
+                content += f"{clean_text(text)}\n"
+
+                if extract_smart and text:
+                    extracted = smart_extract(text)
+                    if extracted:
+                        content += "\n📌 بيانات مستخرجة:\n"
+                        content += format_extracted_data(
+                            extracted
                         )
+                        content += "\n"
 
-                    return result
-                except Exception as e:
-                    error_logger.log_exception(
-                        e, "download_one"
-                    )
-                    return {
-                        "success": False,
-                        "error": str(e),
-                        "task": task
-                    }
+                content += "─" * 40 + "\n"
 
-        download_tasks = [
-            download_one(task) for task in tasks
-        ]
-        results = await asyncio.gather(*download_tasks)
+            async with aiofiles.open(
+                file_path, "w", encoding="utf-8"
+            ) as f:
+                await f.write(content)
 
-        return list(results)
+            bot_logger.info(
+                f"✅ تم تصدير TXT: {file_name}"
+            )
+            return file_path
 
-    async def _process_download(
-            self, task: dict) -> dict:
-        """معالجة تحميل واحد"""
-        owner_id = task.get("owner_id")
-        chat_id = task.get("chat_id")
-        file_data = task.get("file_data")
-        file_name = task.get("file_name")
-        media_type = task.get("media_type", "files")
+        except Exception as e:
+            error_logger.log_exception(
+                e, "export_messages_as_txt", owner_id
+            )
+            return None
 
-        if not file_data:
-            return {"success": False, "error": "no_data"}
+    # ==================== استخراج ذكي ====================
 
-        file_path = await self.save_media(
-            owner_id, chat_id,
-            file_data, file_name, media_type
-        )
+    async def extract_and_export(
+            self,
+            owner_id: int,
+            archive_id: int,
+            chat_title: str,
+            messages: list,
+            extract_type: str = "all") -> Optional[str]:
+        """استخراج ذكي وتصدير كـ TXT"""
+        try:
+            folder = os.path.join(
+                config.DOWNLOAD_PATH,
+                "txt",
+                str(owner_id)
+            )
+            os.makedirs(folder, exist_ok=True)
 
-        if file_path:
-            return {
-                "success": True,
-                "file_path": file_path,
-                "file_name": file_name,
-                "size": len(file_data),
-            }
+            timestamp = datetime.now().strftime(
+                "%Y%m%d_%H%M%S"
+            )
+            safe_title = safe_filename(chat_title)
+            file_name  = (
+                f"{safe_title}_extracted"
+                f"_{timestamp}.txt"
+            )
+            file_path = os.path.join(folder, file_name)
 
-        return {"success": False, "error": "save_failed"}
+            # تجميع كل البيانات المستخرجة
+            all_cards   = []
+            all_phones  = []
+            all_emails  = []
+            all_urls    = []
+
+            for msg in messages:
+                text = msg.get("text", "") or ""
+                if not text:
+                    continue
+
+                extracted = smart_extract(text, extract_type)
+
+                if "cards" in extracted:
+                    all_cards.extend(extracted["cards"])
+                if "phones" in extracted:
+                    all_phones.extend(extracted["phones"])
+                if "emails" in extracted:
+                    all_emails.extend(extracted["emails"])
+                if "urls" in extracted:
+                    all_urls.extend(extracted["urls"])
+
+            # إزالة التكرار
+            all_cards  = list(set(all_cards))
+            all_phones = list(set(all_phones))
+            all_emails = list(set(all_emails))
+            all_urls   = list(set(all_urls))
+
+            content = (
+                f"{'=' * 50}\n"
+                f"القناة: {chat_title}\n"
+                f"نوع الاستخراج: {extract_type}\n"
+                f"التاريخ: "
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"{'=' * 50}\n\n"
+            )
+
+            if all_cards:
+                content += (
+                    f"💳 أرقام البطاقات "
+                    f"({len(all_cards)}):\n"
+                    f"{'─' * 30}\n"
+                )
+                for card in all_cards:
+                    content += f"{card}\n"
+                content += "\n"
+
+            if all_phones:
+                content += (
+                    f"📱 أرقام الهواتف "
+                    f"({len(all_phones)}):\n"
+                    f"{'─' * 30}\n"
+                )
+                for phone in all_phones:
+                    content += f"{phone}\n"
+                content += "\n"
+
+            if all_emails:
+                content += (
+                    f"📧 الإيميلات "
+                    f"({len(all_emails)}):\n"
+                    f"{'─' * 30}\n"
+                )
+                for email in all_emails:
+                    content += f"{email}\n"
+                content += "\n"
+
+            if all_urls:
+                content += (
+                    f"🔗 الروابط "
+                    f"({len(all_urls)}):\n"
+                    f"{'─' * 30}\n"
+                )
+                for url in all_urls:
+                    content += f"{url}\n"
+                content += "\n"
+
+            if not any([
+                all_cards, all_phones,
+                all_emails, all_urls
+            ]):
+                content += "❌ لم يتم العثور على بيانات\n"
+
+            async with aiofiles.open(
+                file_path, "w", encoding="utf-8"
+            ) as f:
+                await f.write(content)
+
+            bot_logger.info(
+                f"✅ تم الاستخراج الذكي: {file_name}"
+            )
+            return file_path
+
+        except Exception as e:
+            error_logger.log_exception(
+                e, "extract_and_export", owner_id
+            )
+            return None
 
     # ==================== ضغط الملفات ====================
 
@@ -208,7 +338,10 @@ class DownloadManager:
                 timestamp = datetime.now().strftime(
                     "%Y%m%d_%H%M%S"
                 )
-                zip_name = f"archive_{archive_id}_{timestamp}.zip"
+                zip_name = (
+                    f"archive_{archive_id}"
+                    f"_{timestamp}.zip"
+                )
 
             zip_path = os.path.join(folder, zip_name)
 
@@ -233,7 +366,6 @@ class DownloadManager:
                 f"✅ تم إنشاء ZIP: {zip_name} "
                 f"({format_size(zip_size)})"
             )
-
             return zip_path
 
         except Exception as e:
@@ -249,11 +381,7 @@ class DownloadManager:
             archive_id: int) -> Optional[str]:
         """ضغط كل ملفات أرشيف معين"""
         try:
-            base_folder = os.path.join(
-                config.DOWNLOAD_PATH
-            )
-
-            all_files = []
+            all_files  = []
             media_types = [
                 "photos", "videos", "files",
                 "audio", "voice", "text"
@@ -261,7 +389,7 @@ class DownloadManager:
 
             for media_type in media_types:
                 folder = os.path.join(
-                    base_folder,
+                    config.DOWNLOAD_PATH,
                     media_type,
                     str(owner_id),
                     str(abs(chat_id))
@@ -285,30 +413,34 @@ class DownloadManager:
             )
             return None
 
-    # ==================== إحصائيات التخزين ====================
+    # ==================== إحصائيات ====================
 
     def get_folder_size(self, folder: str) -> int:
         """حساب حجم مجلد"""
         total = 0
         if not os.path.exists(folder):
             return 0
-        for dirpath, dirnames, filenames in os.walk(folder):
+        for dirpath, _, filenames in os.walk(folder):
             for filename in filenames:
-                filepath = os.path.join(dirpath, filename)
+                filepath = os.path.join(
+                    dirpath, filename
+                )
                 try:
                     total += os.path.getsize(filepath)
                 except OSError:
                     pass
         return total
 
-    def get_user_storage(self, owner_id: int) -> dict:
+    def get_user_storage(
+            self, owner_id: int) -> dict:
         """إحصائيات تخزين مستخدم"""
         stats = {}
         total = 0
 
         media_types = [
             "photos", "videos", "files",
-            "audio", "voice", "text", "stickers"
+            "audio", "voice", "text",
+            "stickers", "txt"
         ]
 
         for media_type in media_types:
@@ -317,20 +449,19 @@ class DownloadManager:
                 media_type,
                 str(owner_id)
             )
-            size = self.get_folder_size(folder)
+            size  = self.get_folder_size(folder)
             count = self._count_files(folder)
             stats[media_type] = {
-                "size": size,
+                "size":           size,
                 "size_formatted": format_size(size),
-                "count": count,
+                "count":          count,
             }
             total += size
 
         stats["total"] = {
-            "size": total,
+            "size":           total,
             "size_formatted": format_size(total),
         }
-
         return stats
 
     def _count_files(self, folder: str) -> int:
@@ -342,33 +473,21 @@ class DownloadManager:
             count += len(files)
         return count
 
-    def get_file_count(
-            self,
-            owner_id: int,
-            media_type: str = None,
-            chat_id: int = None) -> int:
-        """عد الملفات"""
-        if media_type and chat_id:
-            folder = os.path.join(
-                config.DOWNLOAD_PATH,
-                media_type,
-                str(owner_id),
-                str(abs(chat_id))
-            )
-        elif media_type:
-            folder = os.path.join(
-                config.DOWNLOAD_PATH,
-                media_type,
-                str(owner_id)
-            )
-        else:
-            folder = os.path.join(
-                config.DOWNLOAD_PATH,
-                str(owner_id)
-            )
-        return self._count_files(folder)
+    def file_exists(self, file_path: str) -> bool:
+        return os.path.exists(file_path)
 
-    # ==================== تنظيف الملفات ====================
+    def get_file_size(self, file_path: str) -> int:
+        try:
+            return os.path.getsize(file_path)
+        except OSError:
+            return 0
+
+    def is_size_allowed(
+            self, size_bytes: int) -> bool:
+        size_mb = size_bytes / (1024 * 1024)
+        return size_mb <= config.MAX_DOWNLOAD_SIZE
+
+    # ==================== تنظيف ====================
 
     async def cleanup_old_files(
             self,
@@ -376,14 +495,8 @@ class DownloadManager:
             days: int = 30) -> dict:
         """حذف الملفات القديمة"""
         deleted_count = 0
-        deleted_size = 0
+        deleted_size  = 0
         cutoff = datetime.now() - timedelta(days=days)
-
-        base_folder = os.path.join(
-            config.DOWNLOAD_PATH,
-            "*",
-            str(owner_id)
-        )
 
         media_types = [
             "photos", "videos", "files",
@@ -412,20 +525,16 @@ class DownloadManager:
                             size = os.path.getsize(filepath)
                             os.remove(filepath)
                             deleted_count += 1
-                            deleted_size += size
+                            deleted_size  += size
                     except OSError:
                         pass
 
-        bot_logger.info(
-            f"🗑️ تم حذف {deleted_count} ملف "
-            f"({format_size(deleted_size)}) "
-            f"للمستخدم {owner_id}"
-        )
-
         return {
-            "deleted_count": deleted_count,
-            "deleted_size": deleted_size,
-            "deleted_size_formatted": format_size(deleted_size),
+            "deleted_count":          deleted_count,
+            "deleted_size":           deleted_size,
+            "deleted_size_formatted": format_size(
+                deleted_size
+            ),
         }
 
     async def delete_archive_files(
@@ -449,10 +558,6 @@ class DownloadManager:
                 if os.path.exists(folder):
                     shutil.rmtree(folder)
 
-            bot_logger.info(
-                f"🗑️ تم حذف ملفات الأرشيف "
-                f"chat={chat_id} user={owner_id}"
-            )
             return True
 
         except Exception as e:
@@ -461,28 +566,9 @@ class DownloadManager:
             )
             return False
 
-    # ==================== التحقق من الملفات ====================
-
-    def file_exists(self, file_path: str) -> bool:
-        """التحقق من وجود ملف"""
-        return os.path.exists(file_path)
-
-    def get_file_size(self, file_path: str) -> int:
-        """حجم ملف"""
-        try:
-            return os.path.getsize(file_path)
-        except OSError:
-            return 0
-
-    def is_size_allowed(self, size_bytes: int) -> bool:
-        """التحقق من حجم الملف"""
-        size_mb = size_bytes / (1024 * 1024)
-        return size_mb <= config.MAX_DOWNLOAD_SIZE
-
     async def get_all_files(
             self,
             owner_id: int,
-            archive_id: int,
             chat_id: int,
             media_type: str = None) -> List[str]:
         """جلب كل مسارات الملفات"""
