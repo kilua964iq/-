@@ -1,6 +1,5 @@
 import asyncio
 import concurrent.futures
-import nest_asyncio
 import telebot
 from telebot.types import Message, CallbackQuery
 from config import config
@@ -17,8 +16,6 @@ from utils.logger import (
     activity_logger,
     error_logger,
 )
-
-nest_asyncio.apply()
 
 # ==================== حالات المحادثة ====================
 
@@ -63,16 +60,22 @@ def run_async(coro):
         finally:
             new_loop.close()
 
-    with concurrent.futures.ThreadPoolExecutor() as pool:
-        future = pool.submit(run_in_thread)
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1
+    )
+    future = executor.submit(run_in_thread)
+    try:
         return future.result(timeout=60)
+    except Exception as e:
+        print(f"❌ run_async error: {e}", flush=True)
+        return None
+    finally:
+        executor.shutdown(wait=False)
 
 
 # ==================== تسجيل الهاندلرز ====================
 
 def register_auth_handlers(bot: telebot.TeleBot):
-
-    # ==================== /start ====================
 
     @bot.message_handler(commands=["start"])
     def start_command(message: Message):
@@ -141,8 +144,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
 
         run_async(_start())
 
-    # ==================== /help ====================
-
     @bot.message_handler(commands=["help"])
     def help_command(message: Message):
         bot.send_message(
@@ -165,8 +166,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
             parse_mode="Markdown"
         )
 
-    # ==================== /status ====================
-
     @bot.message_handler(commands=["status"])
     def status_command(message: Message):
         from database import db
@@ -176,7 +175,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
             is_authorized = await telegram_service.manager.is_authorized(
                 user_id
             )
-
             if is_authorized:
                 me    = await telegram_service.get_me(user_id)
                 stats = await db.get_stats(user_id)
@@ -203,8 +201,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
 
         run_async(_status())
 
-    # ==================== /cancel ====================
-
     @bot.message_handler(commands=["cancel"])
     def cancel_command(message: Message):
         user_id = message.from_user.id
@@ -216,8 +212,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
                 is_logged_in=True
             )
         )
-
-    # ==================== login ====================
 
     @bot.callback_query_handler(
         func=lambda c: c.data == "login"
@@ -234,8 +228,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
             reply_markup=cancel_keyboard(),
             parse_mode="Markdown"
         )
-
-    # ==================== استقبال الهاتف ====================
 
     @bot.message_handler(
         func=lambda m: get_state(
@@ -306,8 +298,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
                     )
 
         run_async(_send_code())
-
-    # ==================== استقبال الكود ====================
 
     @bot.message_handler(
         func=lambda m: get_state(
@@ -388,8 +378,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
 
         run_async(_sign_in())
 
-    # ==================== كلمة المرور ====================
-
     @bot.message_handler(
         func=lambda m: get_state(
             m.from_user.id
@@ -466,8 +454,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
             parse_mode="Markdown"
         )
 
-    # ==================== تسجيل الخروج ====================
-
     @bot.callback_query_handler(
         func=lambda c: c.data == "logout"
     )
@@ -523,8 +509,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
 
         run_async(_logout())
 
-    # ==================== إلغاء ====================
-
     @bot.callback_query_handler(
         func=lambda c: c.data == "cancel"
     )
@@ -547,8 +531,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
 
         run_async(_cancel())
 
-    # ==================== المطور ====================
-
     @bot.callback_query_handler(
         func=lambda c: c.data == "developer"
     )
@@ -564,8 +546,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
             parse_mode="Markdown"
         )
 
-    # ==================== مساعدة ====================
-
     @bot.callback_query_handler(
         func=lambda c: c.data == "help"
     )
@@ -579,19 +559,11 @@ def register_auth_handlers(bot: telebot.TeleBot):
             "/help - المساعدة\n"
             "/status - حالة الحساب\n"
             "/cancel - إلغاء العملية\n\n"
-            "**كيفية الاستخدام:**\n"
-            "1️⃣ سجل دخول بحسابك\n"
-            "2️⃣ اختر قناة أو مجموعة\n"
-            "3️⃣ اختر نوع المحتوى\n"
-            "4️⃣ اختر الكمية\n"
-            "5️⃣ انتظر اكتمال الجلب\n\n"
             f"👑 المطور: {config.DEVELOPER_NAME}\n"
             f"📱 {config.DEVELOPER_USERNAME}",
             reply_markup=help_keyboard(),
             parse_mode="Markdown"
         )
-
-    # ==================== القائمة الرئيسية ====================
 
     @bot.callback_query_handler(
         func=lambda c: c.data == "main_menu"
