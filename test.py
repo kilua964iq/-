@@ -4,10 +4,11 @@ import sys
 
 print("=== بدء الاختبار ===", flush=True)
 print(f"Python: {sys.version}", flush=True)
-print(f"BOT_TOKEN موجود: {bool(os.getenv('BOT_TOKEN'))}", flush=True)
+print(f"BOT_TOKEN: {bool(os.getenv('BOT_TOKEN'))}", flush=True)
 print(f"API_ID: {os.getenv('API_ID', 'NOT FOUND')}", flush=True)
-print(f"DATABASE_URL موجود: {bool(os.getenv('DATABASE_URL'))}", flush=True)
+print(f"DATABASE_URL: {bool(os.getenv('DATABASE_URL'))}", flush=True)
 print(f"OWNER_ID: {os.getenv('OWNER_ID', 'NOT FOUND')}", flush=True)
+
 
 async def test():
     try:
@@ -28,4 +29,5 @@ async def test():
 
     print("=== انتهى الاختبار ===", flush=True)
 
-asyncio.run(test()
+
+asyncio.run(test())
