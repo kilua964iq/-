@@ -8,6 +8,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def clean_datetime(dt):
+    """تنظيف timezone من التاريخ"""
+    if dt is None:
+        return None
+    if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
+
 class Database:
     def __init__(self):
         self.pool = None
@@ -22,8 +31,10 @@ class Database:
             )
             await self.create_tables()
             logger.info("✅ تم الاتصال بقاعدة البيانات")
+            print("✅ تم الاتصال بقاعدة البيانات", flush=True)
         except Exception as e:
             logger.error(f"❌ خطأ في الاتصال: {e}")
+            print(f"❌ خطأ في الاتصال: {e}", flush=True)
             raise
 
     async def disconnect(self):
@@ -184,7 +195,7 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_activity_user
                     ON activity_log(user_id);
             """)
-            logger.info("✅ تم إنشاء الجداول")
+            print("✅ تم إنشاء الجداول", flush=True)
 
     # ==================== المستخدمين ====================
 
@@ -478,6 +489,10 @@ class Database:
             ai_summary: str = None,
             ai_category: str = None,
             metadata: dict = None):
+
+        # ===== تنظيف التاريخ =====
+        date = clean_datetime(date)
+
         async with self.pool.acquire() as conn:
             return await conn.fetchrow("""
                 INSERT INTO messages (
