@@ -1,4 +1,5 @@
 import asyncio
+import nest_asyncio
 import telebot
 from telebot.types import Message, CallbackQuery
 from config import config
@@ -9,19 +10,17 @@ from utils.keyboards import (
     login_keyboard,
     help_keyboard,
 )
-from utils.helpers import (
-    is_owner,
-    build_progress_bar,
-)
+from utils.helpers import is_owner
 from utils.logger import (
     bot_logger,
     activity_logger,
     error_logger,
 )
 
+nest_asyncio.apply()
+
 # ==================== حالات المحادثة ====================
 
-# تخزين حالات المستخدمين
 user_states = {}
 
 STATE_IDLE          = "idle"
@@ -53,84 +52,96 @@ def get_user_data(user_id: int, key: str):
     return user_states.get(user_id, {}).get(key)
 
 
+def run_async(coro):
+    """تشغيل coroutine بشكل آمن"""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(
+                    asyncio.run, coro
+                )
+                return future.result()
+        else:
+            return loop.run_until_complete(coro)
+    except Exception as e:
+        print(f"❌ خطأ في run_async: {e}", flush=True)
+        return None
+
+
 # ==================== تسجيل الهاندلرز ====================
 
 def register_auth_handlers(bot: telebot.TeleBot):
-    """تسجيل كل هاندلرز المصادقة"""
 
     # ==================== /start ====================
 
     @bot.message_handler(commands=["start"])
     def start_command(message: Message):
-        asyncio.run(_start_command(bot, message))
-
-    async def _start_command(
-            bot: telebot.TeleBot,
-            message: Message):
         from database import db
 
         user_id   = message.from_user.id
         full_name = message.from_user.full_name
 
-        # تسجيل المستخدم
-        await db.create_user(
-            telegram_id = user_id,
-            username    = message.from_user.username,
-            full_name   = full_name,
-        )
-
-        # التحقق من الحظر
-        user = await db.get_user(user_id)
-        if user and user["is_banned"]:
-            bot.send_message(
-                user_id,
-                "🚫 أنت محظور من استخدام البوت"
+        async def _start():
+            await db.create_user(
+                telegram_id = user_id,
+                username    = message.from_user.username,
+                full_name   = full_name,
             )
-            return
 
-        await db.log_activity(
-            user_id, "START",
-            {"username": message.from_user.username}
-        )
+            user = await db.get_user(user_id)
+            if user and user["is_banned"]:
+                bot.send_message(
+                    user_id,
+                    "🚫 أنت محظور من استخدام البوت"
+                )
+                return
 
-        # التحقق من تسجيل الدخول
-        is_authorized = await telegram_service.manager.is_authorized(
-            user_id
-        )
+            await db.log_activity(
+                user_id, "START",
+                {"username": message.from_user.username}
+            )
 
-        if is_authorized:
-            me = await telegram_service.get_me(user_id)
-            name = (
-                me.get("full_name", full_name)
-                if me else full_name
+            is_authorized = await telegram_service.manager.is_authorized(
+                user_id
             )
-            bot.send_message(
-                user_id,
-                f"👋 أهلاً مجدداً **{name}**!\n\n"
-                f"اختر ما تريد من القائمة 👇",
-                reply_markup=main_menu_keyboard(
-                    is_logged_in=True
-                ),
-                parse_mode="Markdown"
-            )
-        else:
-            bot.send_message(
-                user_id,
-                f"👋 مرحباً **{full_name}**!\n\n"
-                f"🤖 أنا بوت أرشفة تيليغرام\n\n"
-                f"**ماذا أستطيع أن أفعل؟**\n"
-                f"📋 جلب وأرشفة محتوى قنواتك\n"
-                f"🖼️ حفظ الصور والفيديوهات والملفات\n"
-                f"🤖 تلخيص وتصنيف المحتوى بالذكاء الاصطناعي\n"
-                f"📊 إحصائيات تفصيلية\n"
-                f"🔍 بحث في المحتوى المحفوظ\n"
-                f"💳 استخراج ذكي للبيانات\n\n"
-                f"📱 ابدأ بتسجيل الدخول بحسابك 👇",
-                reply_markup=main_menu_keyboard(
-                    is_logged_in=False
-                ),
-                parse_mode="Markdown"
-            )
+
+            if is_authorized:
+                me = await telegram_service.get_me(user_id)
+                name = (
+                    me.get("full_name", full_name)
+                    if me else full_name
+                )
+                bot.send_message(
+                    user_id,
+                    f"👋 أهلاً مجدداً **{name}**!\n\n"
+                    f"اختر ما تريد من القائمة 👇",
+                    reply_markup=main_menu_keyboard(
+                        is_logged_in=True
+                    ),
+                    parse_mode="Markdown"
+                )
+            else:
+                bot.send_message(
+                    user_id,
+                    f"👋 مرحباً **{full_name}**!\n\n"
+                    f"🤖 أنا بوت أرشفة تيليغرام\n\n"
+                    f"**ماذا أستطيع أن أفعل؟**\n"
+                    f"📋 جلب وأرشفة محتوى قنواتك\n"
+                    f"🖼️ حفظ الصور والفيديوهات والملفات\n"
+                    f"🤖 تلخيص وتصنيف المحتوى بالذكاء الاصطناعي\n"
+                    f"📊 إحصائيات تفصيلية\n"
+                    f"🔍 بحث في المحتوى المحفوظ\n"
+                    f"💳 استخراج ذكي للبيانات\n\n"
+                    f"📱 ابدأ بتسجيل الدخول بحسابك 👇",
+                    reply_markup=main_menu_keyboard(
+                        is_logged_in=False
+                    ),
+                    parse_mode="Markdown"
+                )
+
+        run_async(_start())
 
     # ==================== /help ====================
 
@@ -160,43 +171,41 @@ def register_auth_handlers(bot: telebot.TeleBot):
 
     @bot.message_handler(commands=["status"])
     def status_command(message: Message):
-        asyncio.run(_status_command(bot, message))
-
-    async def _status_command(
-            bot: telebot.TeleBot,
-            message: Message):
         from database import db
 
-        user_id       = message.from_user.id
-        is_authorized = await telegram_service.manager.is_authorized(
-            user_id
-        )
+        user_id = message.from_user.id
 
-        if is_authorized:
-            me    = await telegram_service.get_me(user_id)
-            stats = await db.get_stats(user_id)
+        async def _status():
+            is_authorized = await telegram_service.manager.is_authorized(
+                user_id
+            )
 
-            bot.send_message(
-                user_id,
-                f"✅ **حالة الحساب**\n\n"
-                f"👤 الاسم: `{me.get('full_name', '')}`\n"
-                f"📱 الهاتف: `{me.get('phone', '')}`\n"
-                f"📦 الأرشيفات: "
-                f"`{stats['total_archives'] or 0}`\n"
-                f"💬 الرسائل: "
-                f"`{stats['total_messages'] or 0}`\n",
-                reply_markup=main_menu_keyboard(
-                    is_logged_in=True
-                ),
-                parse_mode="Markdown"
-            )
-        else:
-            bot.send_message(
-                user_id,
-                "❌ غير مسجل دخول\n"
-                "استخدم /start",
-                reply_markup=login_keyboard()
-            )
+            if is_authorized:
+                me    = await telegram_service.get_me(user_id)
+                stats = await db.get_stats(user_id)
+
+                bot.send_message(
+                    user_id,
+                    f"✅ **حالة الحساب**\n\n"
+                    f"👤 الاسم: `{me.get('full_name', '')}`\n"
+                    f"📱 الهاتف: `{me.get('phone', '')}`\n"
+                    f"📦 الأرشيفات: "
+                    f"`{stats['total_archives'] or 0}`\n"
+                    f"💬 الرسائل: "
+                    f"`{stats['total_messages'] or 0}`\n",
+                    reply_markup=main_menu_keyboard(
+                        is_logged_in=True
+                    ),
+                    parse_mode="Markdown"
+                )
+            else:
+                bot.send_message(
+                    user_id,
+                    "❌ غير مسجل دخول\nاستخدم /start",
+                    reply_markup=login_keyboard()
+                )
+
+        run_async(_status())
 
     # ==================== /cancel ====================
 
@@ -212,7 +221,7 @@ def register_auth_handlers(bot: telebot.TeleBot):
             )
         )
 
-    # ==================== callback: login ====================
+    # ==================== login callback ====================
 
     @bot.callback_query_handler(
         func=lambda c: c.data == "login"
@@ -232,7 +241,7 @@ def register_auth_handlers(bot: telebot.TeleBot):
             parse_mode="Markdown"
         )
 
-    # ==================== استقبال الرسائل ====================
+    # ==================== استقبال الهاتف ====================
 
     @bot.message_handler(
         func=lambda m: get_state(
@@ -240,80 +249,74 @@ def register_auth_handlers(bot: telebot.TeleBot):
         ) == STATE_WAITING_PHONE
     )
     def receive_phone(message: Message):
-        asyncio.run(_receive_phone(bot, message))
-
-    async def _receive_phone(
-            bot: telebot.TeleBot,
-            message: Message):
         user_id = message.from_user.id
         phone   = message.text.strip()
 
-        if (not phone.startswith("+") or
-                len(phone) < 10):
+        if not phone.startswith("+") or len(phone) < 10:
             bot.send_message(
                 user_id,
                 "❌ رقم غير صحيح\n"
-                "أرسل الرقم مع رمز الدولة\n"
                 "مثال: `+9647701234567`",
                 reply_markup=cancel_keyboard(),
                 parse_mode="Markdown"
             )
             return
 
+        set_state(user_id, STATE_WAITING_PHONE, phone=phone)
+
         wait_msg = bot.send_message(
             user_id,
             "⏳ جاري إرسال كود التحقق..."
         )
 
-        result = await telegram_service.send_code(
-            user_id, phone
-        )
-
-        try:
-            bot.delete_message(user_id, wait_msg.message_id)
-        except Exception:
-            pass
-
-        if result["success"]:
-            set_state(
-                user_id,
-                STATE_WAITING_CODE,
-                phone=phone,
-                phone_code_hash=result["phone_code_hash"]
+        async def _send_code():
+            result = await telegram_service.send_code(
+                user_id, phone
             )
 
-            bot.send_message(
-                user_id,
-                f"✅ تم إرسال كود التحقق إلى\n"
-                f"`{phone}`\n\n"
-                f"🔢 أرسل الكود المكون من 5 أرقام",
-                reply_markup=cancel_keyboard(),
-                parse_mode="Markdown"
-            )
-        else:
-            error = result.get("error", "")
-            clear_state(user_id)
+            try:
+                bot.delete_message(
+                    user_id, wait_msg.message_id
+                )
+            except Exception:
+                pass
 
-            if error == "flood_wait":
-                seconds = result.get("seconds", 60)
+            if result["success"]:
+                set_state(
+                    user_id,
+                    STATE_WAITING_CODE,
+                    phone=phone,
+                    phone_code_hash=result["phone_code_hash"]
+                )
                 bot.send_message(
                     user_id,
-                    f"⚠️ انتظر {seconds} ثانية وحاول مجدداً",
-                    reply_markup=login_keyboard()
+                    f"✅ تم إرسال كود التحقق إلى\n"
+                    f"`{phone}`\n\n"
+                    f"🔢 أرسل الكود المكون من 5 أرقام",
+                    reply_markup=cancel_keyboard(),
+                    parse_mode="Markdown"
                 )
-            elif error == "phone_invalid":
-                bot.send_message(
-                    user_id,
-                    "❌ رقم الهاتف غير صحيح",
-                    reply_markup=cancel_keyboard()
-                )
-                set_state(user_id, STATE_WAITING_PHONE)
             else:
-                bot.send_message(
-                    user_id,
-                    f"❌ خطأ: {result.get('message', '')}",
-                    reply_markup=login_keyboard()
-                )
+                error = result.get("error", "")
+                clear_state(user_id)
+
+                if error == "flood_wait":
+                    seconds = result.get("seconds", 60)
+                    bot.send_message(
+                        user_id,
+                        f"⚠️ انتظر {seconds} ثانية وحاول مجدداً",
+                        reply_markup=login_keyboard()
+                    )
+                else:
+                    bot.send_message(
+                        user_id,
+                        f"❌ خطأ: {result.get('message', '')}",
+                        reply_markup=login_keyboard()
+                    )
+
+        run_async(_send_code())
+
+    # ==================== استقبال الكود ====================
 
     @bot.message_handler(
         func=lambda m: get_state(
@@ -321,11 +324,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
         ) == STATE_WAITING_CODE
     )
     def receive_code(message: Message):
-        asyncio.run(_receive_code(bot, message))
-
-    async def _receive_code(
-            bot: telebot.TeleBot,
-            message: Message):
         from database import db
 
         user_id = message.from_user.id
@@ -350,50 +348,57 @@ def register_auth_handlers(bot: telebot.TeleBot):
             user_id, "⏳ جاري التحقق..."
         )
 
-        result = await telegram_service.sign_in(
-            user_id, phone, code, phone_code_hash
-        )
-
-        try:
-            bot.delete_message(user_id, wait_msg.message_id)
-        except Exception:
-            pass
-
-        if result["success"]:
-            await _handle_login_success(
-                bot, user_id, phone, db
+        async def _sign_in():
+            result = await telegram_service.sign_in(
+                user_id, phone, code, phone_code_hash
             )
+
+            try:
+                bot.delete_message(
+                    user_id, wait_msg.message_id
+                )
+            except Exception:
+                pass
+
+            if result["success"]:
+                await _handle_login_success(
+                    bot, user_id, phone, db
+                )
+                clear_state(user_id)
+                return
+
+            error = result.get("error", "")
+
+            if result.get("needs_password"):
+                set_state(user_id, STATE_WAITING_PASS)
+                bot.send_message(
+                    user_id,
+                    "🔐 **التحقق بخطوتين**\n\n"
+                    "أرسل كلمة المرور الثنائية",
+                    reply_markup=cancel_keyboard(),
+                    parse_mode="Markdown"
+                )
+                return
+
+            if error == "code_invalid":
+                bot.send_message(
+                    user_id,
+                    "❌ الكود غير صحيح أو منتهي\n"
+                    "أرسل الكود مجدداً",
+                    reply_markup=cancel_keyboard()
+                )
+                return
+
             clear_state(user_id)
-            return
-
-        error = result.get("error", "")
-
-        if result.get("needs_password"):
-            set_state(user_id, STATE_WAITING_PASS)
             bot.send_message(
                 user_id,
-                "🔐 **التحقق بخطوتين**\n\n"
-                "أرسل كلمة المرور الثنائية لحسابك",
-                reply_markup=cancel_keyboard(),
-                parse_mode="Markdown"
+                f"❌ خطأ: {result.get('message', '')}",
+                reply_markup=login_keyboard()
             )
-            return
 
-        if error == "code_invalid":
-            bot.send_message(
-                user_id,
-                "❌ الكود غير صحيح أو منتهي\n"
-                "أرسل الكود مجدداً",
-                reply_markup=cancel_keyboard()
-            )
-            return
+        run_async(_sign_in())
 
-        clear_state(user_id)
-        bot.send_message(
-            user_id,
-            f"❌ خطأ: {result.get('message', '')}",
-            reply_markup=login_keyboard()
-        )
+    # ==================== استقبال كلمة المرور ====================
 
     @bot.message_handler(
         func=lambda m: get_state(
@@ -401,17 +406,11 @@ def register_auth_handlers(bot: telebot.TeleBot):
         ) == STATE_WAITING_PASS
     )
     def receive_password(message: Message):
-        asyncio.run(_receive_password(bot, message))
-
-    async def _receive_password(
-            bot: telebot.TeleBot,
-            message: Message):
         from database import db
 
         user_id  = message.from_user.id
         password = message.text.strip()
 
-        # حذف رسالة كلمة المرور للأمان
         try:
             bot.delete_message(
                 user_id, message.message_id
@@ -423,56 +422,48 @@ def register_auth_handlers(bot: telebot.TeleBot):
             user_id, "⏳ جاري التحقق..."
         )
 
-        result = await telegram_service.sign_in_password(
-            user_id, password
-        )
-
-        try:
-            bot.delete_message(
-                user_id, wait_msg.message_id
+        async def _sign_in_pass():
+            result = await telegram_service.sign_in_password(
+                user_id, password
             )
-        except Exception:
-            pass
 
-        if result["success"]:
-            phone = get_user_data(user_id, "phone") or ""
-            await _handle_login_success(
-                bot, user_id, phone, db
+            try:
+                bot.delete_message(
+                    user_id, wait_msg.message_id
+                )
+            except Exception:
+                pass
+
+            if result["success"]:
+                phone = get_user_data(user_id, "phone") or ""
+                await _handle_login_success(
+                    bot, user_id, phone, db
+                )
+                clear_state(user_id)
+                return
+
+            bot.send_message(
+                user_id,
+                "❌ كلمة المرور غير صحيحة\n"
+                "أرسل كلمة المرور مجدداً",
+                reply_markup=cancel_keyboard()
             )
-            clear_state(user_id)
-            return
 
-        bot.send_message(
-            user_id,
-            "❌ كلمة المرور غير صحيحة\n"
-            "أرسل كلمة المرور مجدداً",
-            reply_markup=cancel_keyboard()
-        )
+        run_async(_sign_in_pass())
 
     async def _handle_login_success(
-            bot: telebot.TeleBot,
-            user_id: int,
-            phone: str,
-            db):
-        """معالجة نجاح تسجيل الدخول"""
+            bot, user_id, phone, db):
         me = await telegram_service.get_me(user_id)
         full_name = (
             me.get("full_name", "") if me else ""
         )
         phone = me.get("phone", phone) if me else phone
 
-        await db.update_user(
-            user_id,
-            phone=phone,
-        )
+        await db.update_user(user_id, phone=phone)
         await db.save_session(user_id, phone)
         await db.log_activity(
             user_id, "LOGIN_SUCCESS",
             {"phone": phone}
-        )
-
-        bot_logger.info(
-            f"✅ تسجيل دخول ناجح للمستخدم {user_id}"
         )
 
         bot.send_message(
@@ -507,46 +498,44 @@ def register_auth_handlers(bot: telebot.TeleBot):
         func=lambda c: c.data == "confirm_logout"
     )
     def confirm_logout_callback(call: CallbackQuery):
-        asyncio.run(_confirm_logout(bot, call))
-
-    async def _confirm_logout(
-            bot: telebot.TeleBot,
-            call: CallbackQuery):
         from database import db
 
-        user_id  = call.from_user.id
+        user_id = call.from_user.id
         bot.answer_callback_query(call.id)
 
         wait_msg = bot.send_message(
             user_id, "⏳ جاري تسجيل الخروج..."
         )
 
-        success = await telegram_service.logout(user_id)
-        await db.delete_session(user_id)
-        await db.log_activity(user_id, "LOGOUT")
+        async def _logout():
+            success = await telegram_service.logout(user_id)
+            await db.delete_session(user_id)
+            await db.log_activity(user_id, "LOGOUT")
 
-        try:
-            bot.delete_message(
-                user_id, wait_msg.message_id
-            )
-        except Exception:
-            pass
-
-        if success:
-            bot.send_message(
-                user_id,
-                "✅ تم تسجيل الخروج بنجاح\n\n"
-                "استخدم /start للدخول مجدداً",
-                reply_markup=login_keyboard()
-            )
-        else:
-            bot.send_message(
-                user_id,
-                "❌ حدث خطأ أثناء تسجيل الخروج",
-                reply_markup=main_menu_keyboard(
-                    is_logged_in=True
+            try:
+                bot.delete_message(
+                    user_id, wait_msg.message_id
                 )
-            )
+            except Exception:
+                pass
+
+            if success:
+                bot.send_message(
+                    user_id,
+                    "✅ تم تسجيل الخروج بنجاح\n\n"
+                    "استخدم /start للدخول مجدداً",
+                    reply_markup=login_keyboard()
+                )
+            else:
+                bot.send_message(
+                    user_id,
+                    "❌ حدث خطأ أثناء تسجيل الخروج",
+                    reply_markup=main_menu_keyboard(
+                        is_logged_in=True
+                    )
+                )
+
+        run_async(_logout())
 
     # ==================== إلغاء ====================
 
@@ -554,26 +543,23 @@ def register_auth_handlers(bot: telebot.TeleBot):
         func=lambda c: c.data == "cancel"
     )
     def cancel_callback(call: CallbackQuery):
-        asyncio.run(_cancel_callback(bot, call))
-
-    async def _cancel_callback(
-            bot: telebot.TeleBot,
-            call: CallbackQuery):
         user_id = call.from_user.id
         bot.answer_callback_query(call.id)
         clear_state(user_id)
 
-        is_authorized = await telegram_service.manager.is_authorized(
-            user_id
-        )
-
-        bot.send_message(
-            user_id,
-            "❌ تم الإلغاء",
-            reply_markup=main_menu_keyboard(
-                is_logged_in=is_authorized
+        async def _cancel():
+            is_authorized = await telegram_service.manager.is_authorized(
+                user_id
             )
-        )
+            bot.send_message(
+                user_id,
+                "❌ تم الإلغاء",
+                reply_markup=main_menu_keyboard(
+                    is_logged_in=is_authorized
+                )
+            )
+
+        run_async(_cancel())
 
     # ==================== المطور ====================
 
@@ -625,24 +611,21 @@ def register_auth_handlers(bot: telebot.TeleBot):
         func=lambda c: c.data == "main_menu"
     )
     def main_menu_callback(call: CallbackQuery):
-        asyncio.run(_main_menu_callback(bot, call))
-
-    async def _main_menu_callback(
-            bot: telebot.TeleBot,
-            call: CallbackQuery):
         user_id = call.from_user.id
         bot.answer_callback_query(call.id)
 
-        is_authorized = await telegram_service.manager.is_authorized(
-            user_id
-        )
+        async def _main_menu():
+            is_authorized = await telegram_service.manager.is_authorized(
+                user_id
+            )
+            bot.send_message(
+                user_id,
+                "🏠 **القائمة الرئيسية**\n\n"
+                "اختر ما تريد 👇",
+                reply_markup=main_menu_keyboard(
+                    is_logged_in=is_authorized
+                ),
+                parse_mode="Markdown"
+            )
 
-        bot.send_message(
-            user_id,
-            "🏠 **القائمة الرئيسية**\n\n"
-            "اختر ما تريد 👇",
-            reply_markup=main_menu_keyboard(
-                is_logged_in=is_authorized
-            ),
-            parse_mode="Markdown"
-        )
+        run_async(_main_menu())
