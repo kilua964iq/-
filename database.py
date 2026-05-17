@@ -145,40 +145,6 @@ class Database:
                     completed_at TIMESTAMP
                 );
 
-                CREATE TABLE IF NOT EXISTS statistics (
-                    id BIGSERIAL PRIMARY KEY,
-                    owner_id BIGINT NOT NULL,
-                    date DATE DEFAULT CURRENT_DATE,
-                    total_archives INTEGER DEFAULT 0,
-                    total_messages INTEGER DEFAULT 0,
-                    total_files INTEGER DEFAULT 0,
-                    total_size BIGINT DEFAULT 0,
-                    ai_requests INTEGER DEFAULT 0,
-                    metadata JSONB DEFAULT '{}',
-                    UNIQUE(owner_id, date)
-                );
-
-                CREATE TABLE IF NOT EXISTS alerts (
-                    id BIGSERIAL PRIMARY KEY,
-                    owner_id BIGINT NOT NULL,
-                    chat_id BIGINT NOT NULL,
-                    alert_type VARCHAR(50),
-                    keywords TEXT[],
-                    is_active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    last_triggered TIMESTAMP,
-                    trigger_count INTEGER DEFAULT 0
-                );
-
-                CREATE TABLE IF NOT EXISTS activity_log (
-                    id BIGSERIAL PRIMARY KEY,
-                    user_id BIGINT NOT NULL,
-                    action VARCHAR(100),
-                    details JSONB DEFAULT '{}',
-                    ip_address VARCHAR(50),
-                    created_at TIMESTAMP DEFAULT NOW()
-                );
-
                 CREATE TABLE IF NOT EXISTS user_settings (
                     id BIGSERIAL PRIMARY KEY,
                     telegram_id BIGINT UNIQUE NOT NULL,
@@ -187,7 +153,7 @@ class Database:
                     extract_phones BOOLEAN DEFAULT TRUE,
                     extract_emails BOOLEAN DEFAULT TRUE,
                     extract_urls BOOLEAN DEFAULT TRUE,
-                    clean_text BOOLEAN DEFAULT TRUE,
+                    save_txt BOOLEAN DEFAULT FALSE,
                     ai_summary BOOLEAN DEFAULT FALSE,
                     ai_category BOOLEAN DEFAULT FALSE,
                     voice_to_text BOOLEAN DEFAULT FALSE,
@@ -195,16 +161,20 @@ class Database:
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
 
+                CREATE TABLE IF NOT EXISTS activity_log (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    action VARCHAR(100),
+                    details JSONB DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT NOW()
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_messages_archive
                     ON messages(archive_id);
                 CREATE INDEX IF NOT EXISTS idx_messages_owner
                     ON messages(owner_id);
-                CREATE INDEX IF NOT EXISTS idx_messages_type
-                    ON messages(message_type);
                 CREATE INDEX IF NOT EXISTS idx_archives_owner
                     ON archives(owner_id);
-                CREATE INDEX IF NOT EXISTS idx_tasks_status
-                    ON tasks(status);
                 CREATE INDEX IF NOT EXISTS idx_activity_user
                     ON activity_log(user_id);
             """)
@@ -219,11 +189,9 @@ class Database:
                 telegram_id
             )
 
-    async def create_user(
-            self,
-            telegram_id: int,
-            username: str = None,
-            full_name: str = None):
+    async def create_user(self, telegram_id: int,
+                          username: str = None,
+                          full_name: str = None):
         async with self.pool.acquire() as conn:
             return await conn.fetchrow("""
                 INSERT INTO users (telegram_id, username, full_name)
@@ -234,8 +202,7 @@ class Database:
                 RETURNING *
             """, telegram_id, username, full_name)
 
-    async def update_user(
-            self, telegram_id: int, **kwargs):
+    async def update_user(self, telegram_id: int, **kwargs):
         fields = ", ".join(
             [f"{k} = ${i+2}"
              for i, k in enumerate(kwargs.keys())]
@@ -248,10 +215,8 @@ class Database:
                 telegram_id, *values
             )
 
-    async def get_all_users(
-            self,
-            limit: int = 100,
-            offset: int = 0):
+    async def get_all_users(self, limit: int = 100,
+                            offset: int = 0):
         async with self.pool.acquire() as conn:
             return await conn.fetch("""
                 SELECT * FROM users
@@ -299,8 +264,8 @@ class Database:
                 """, telegram_id)
             return settings
 
-    async def update_settings(
-            self, telegram_id: int, **kwargs):
+    async def update_settings(self, telegram_id: int,
+                              **kwargs):
         fields = ", ".join(
             [f"{k} = ${i+2}"
              for i, k in enumerate(kwargs.keys())]
@@ -324,13 +289,10 @@ class Database:
                 telegram_id
             )
 
-    async def add_admin(
-            self,
-            telegram_id: int,
-            username: str,
-            full_name: str,
-            added_by: int,
-            permissions: dict = None):
+    async def add_admin(self, telegram_id: int,
+                        username: str, full_name: str,
+                        added_by: int,
+                        permissions: dict = None):
         if permissions is None:
             permissions = {
                 "can_view_users":      True,
@@ -376,11 +338,9 @@ class Database:
 
     # ==================== الجلسات ====================
 
-    async def save_session(
-            self,
-            telegram_id: int,
-            phone: str,
-            session_string: str = None):
+    async def save_session(self, telegram_id: int,
+                           phone: str,
+                           session_string: str = None):
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO user_sessions
@@ -408,14 +368,11 @@ class Database:
 
     # ==================== القنوات ====================
 
-    async def save_chat(
-            self,
-            owner_id: int,
-            chat_id: int,
-            chat_title: str,
-            chat_type: str,
-            chat_username: str = None,
-            members_count: int = 0):
+    async def save_chat(self, owner_id: int,
+                        chat_id: int, chat_title: str,
+                        chat_type: str,
+                        chat_username: str = None,
+                        members_count: int = 0):
         async with self.pool.acquire() as conn:
             return await conn.fetchrow("""
                 INSERT INTO chats
@@ -430,10 +387,8 @@ class Database:
             """, owner_id, chat_id, chat_title,
                 chat_type, chat_username, members_count)
 
-    async def get_user_chats(
-            self,
-            owner_id: int,
-            chat_type: str = None):
+    async def get_user_chats(self, owner_id: int,
+                             chat_type: str = None):
         async with self.pool.acquire() as conn:
             if chat_type:
                 return await conn.fetch("""
@@ -450,13 +405,11 @@ class Database:
 
     # ==================== الأرشيف ====================
 
-    async def create_archive(
-            self,
-            owner_id: int,
-            chat_id: int,
-            chat_title: str,
-            content_type: str,
-            settings: dict = None):
+    async def create_archive(self, owner_id: int,
+                             chat_id: int,
+                             chat_title: str,
+                             content_type: str,
+                             settings: dict = None):
         async with self.pool.acquire() as conn:
             return await conn.fetchrow("""
                 INSERT INTO archives
@@ -468,8 +421,8 @@ class Database:
                 content_type,
                 json.dumps(settings or {}))
 
-    async def update_archive(
-            self, archive_id: int, **kwargs):
+    async def update_archive(self, archive_id: int,
+                             **kwargs):
         fields = ", ".join(
             [f"{k} = ${i+2}"
              for i, k in enumerate(kwargs.keys())]
@@ -489,11 +442,9 @@ class Database:
                 archive_id
             )
 
-    async def get_user_archives(
-            self,
-            owner_id: int,
-            limit: int = 20,
-            offset: int = 0):
+    async def get_user_archives(self, owner_id: int,
+                                limit: int = 20,
+                                offset: int = 0):
         async with self.pool.acquire() as conn:
             return await conn.fetch("""
                 SELECT * FROM archives
@@ -502,8 +453,7 @@ class Database:
                 LIMIT $2 OFFSET $3
             """, owner_id, limit, offset)
 
-    async def count_archives(
-            self, owner_id: int = None):
+    async def count_archives(self, owner_id: int = None):
         async with self.pool.acquire() as conn:
             if owner_id:
                 return await conn.fetchval(
@@ -517,29 +467,24 @@ class Database:
 
     # ==================== الرسائل ====================
 
-    async def save_message(
-            self,
-            archive_id: int,
-            owner_id: int,
-            chat_id: int,
-            message_id: int,
-            message_type: str,
-            text: str = None,
-            file_path: str = None,
-            file_size: int = 0,
-            file_name: str = None,
-            mime_type: str = None,
-            date: datetime = None,
-            sender_id: int = None,
-            sender_name: str = None,
-            views: int = 0,
-            forwards: int = 0,
-            ai_summary: str = None,
-            ai_category: str = None,
-            metadata: dict = None):
-
+    async def save_message(self, archive_id: int,
+                           owner_id: int, chat_id: int,
+                           message_id: int,
+                           message_type: str,
+                           text: str = None,
+                           file_path: str = None,
+                           file_size: int = 0,
+                           file_name: str = None,
+                           mime_type: str = None,
+                           date: datetime = None,
+                           sender_id: int = None,
+                           sender_name: str = None,
+                           views: int = 0,
+                           forwards: int = 0,
+                           ai_summary: str = None,
+                           ai_category: str = None,
+                           metadata: dict = None):
         date = clean_datetime(date)
-
         async with self.pool.acquire() as conn:
             return await conn.fetchrow("""
                 INSERT INTO messages (
@@ -564,12 +509,11 @@ class Database:
                 ai_summary, ai_category,
                 json.dumps(metadata or {}))
 
-    async def get_archive_messages(
-            self,
-            archive_id: int,
-            message_type: str = None,
-            limit: int = 50,
-            offset: int = 0):
+    async def get_archive_messages(self,
+                                   archive_id: int,
+                                   message_type: str = None,
+                                   limit: int = 50,
+                                   offset: int = 0):
         async with self.pool.acquire() as conn:
             if message_type:
                 return await conn.fetch("""
@@ -587,11 +531,9 @@ class Database:
                 LIMIT $2 OFFSET $3
             """, archive_id, limit, offset)
 
-    async def search_messages(
-            self,
-            owner_id: int,
-            query: str,
-            limit: int = 50):
+    async def search_messages(self, owner_id: int,
+                              query: str,
+                              limit: int = 50):
         async with self.pool.acquire() as conn:
             return await conn.fetch("""
                 SELECT * FROM messages
@@ -601,10 +543,8 @@ class Database:
                 LIMIT $3
             """, owner_id, f"%{query}%", limit)
 
-    async def search_all_chats(
-            self,
-            owner_id: int,
-            query: str):
+    async def search_all_chats(self, owner_id: int,
+                               query: str):
         async with self.pool.acquire() as conn:
             return await conn.fetch("""
                 SELECT m.*, a.chat_title
@@ -616,10 +556,9 @@ class Database:
                 LIMIT 100
             """, owner_id, f"%{query}%")
 
-    async def count_messages(
-            self,
-            archive_id: int = None,
-            owner_id: int = None):
+    async def count_messages(self,
+                             archive_id: int = None,
+                             owner_id: int = None):
         async with self.pool.acquire() as conn:
             if archive_id:
                 return await conn.fetchval(
@@ -637,52 +576,9 @@ class Database:
                 "SELECT COUNT(*) FROM messages"
             )
 
-    # ==================== المهام ====================
-
-    async def create_task(
-            self,
-            owner_id: int,
-            task_type: str,
-            data: dict = None,
-            priority: int = 0):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow("""
-                INSERT INTO tasks
-                (owner_id, task_type, data, priority)
-                VALUES ($1, $2, $3, $4)
-                RETURNING *
-            """, owner_id, task_type,
-                json.dumps(data or {}), priority)
-
-    async def update_task(
-            self, task_id: int, **kwargs):
-        fields = ", ".join(
-            [f"{k} = ${i+2}"
-             for i, k in enumerate(kwargs.keys())]
-        )
-        values = list(kwargs.values())
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                f"UPDATE tasks SET {fields} "
-                f"WHERE id = $1",
-                task_id, *values
-            )
-
-    async def get_pending_tasks(
-            self, limit: int = 10):
-        async with self.pool.acquire() as conn:
-            return await conn.fetch("""
-                SELECT * FROM tasks
-                WHERE status = 'pending'
-                ORDER BY priority DESC,
-                created_at ASC
-                LIMIT $1
-            """, limit)
-
     # ==================== الإحصائيات ====================
 
-    async def get_stats(
-            self, owner_id: int = None):
+    async def get_stats(self, owner_id: int = None):
         async with self.pool.acquire() as conn:
             if owner_id:
                 return await conn.fetchrow("""
@@ -718,11 +614,9 @@ class Database:
                     ON a.id = m.archive_id
             """)
 
-    async def log_activity(
-            self,
-            user_id: int,
-            action: str,
-            details: dict = None):
+    async def log_activity(self, user_id: int,
+                           action: str,
+                           details: dict = None):
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO activity_log
@@ -731,10 +625,9 @@ class Database:
             """, user_id, action,
                 json.dumps(details or {}))
 
-    async def get_activity_log(
-            self,
-            user_id: int = None,
-            limit: int = 50):
+    async def get_activity_log(self,
+                               user_id: int = None,
+                               limit: int = 50):
         async with self.pool.acquire() as conn:
             if user_id:
                 return await conn.fetch("""
