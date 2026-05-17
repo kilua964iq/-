@@ -1,13 +1,6 @@
 import asyncio
-from telegram import Update
-from telegram.ext import (
-    ContextTypes,
-    ConversationHandler,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    filters,
-)
+import telebot
+from telebot.types import Message, CallbackQuery
 from config import config
 from services.telegram_client import telegram_service
 from utils.keyboards import (
@@ -19,554 +12,562 @@ from utils.keyboards import (
 )
 from utils.helpers import (
     format_number,
-    safe_edit_message,
-    safe_delete_message,
+    is_owner,
     get_chat_type,
+    extract_username,
+    get_members_count,
 )
 from utils.logger import (
     bot_logger,
     activity_logger,
     error_logger,
 )
+from handlers.auth import (
+    get_state,
+    set_state,
+    clear_state,
+    get_user_data,
+    STATE_IDLE,
+)
 
+# ==================== حالات ====================
 
-# ==================== حالات المحادثة ====================
-
-WAITING_USERNAME = range(1)
+STATE_WAITING_USERNAME = "waiting_username"
 
 
 # ==================== دوال مساعدة ====================
 
 async def require_login(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE) -> bool:
+        bot: telebot.TeleBot,
+        user_id: int) -> bool:
     """التحقق من تسجيل الدخول"""
-    user_id = update.effective_user.id
     is_authorized = await telegram_service.manager.is_authorized(
         user_id
     )
-
     if not is_authorized:
-        msg = (
-            update.callback_query.message
-            if update.callback_query
-            else update.message
-        )
-        await msg.reply_text(
+        bot.send_message(
+            user_id,
             "❌ يجب تسجيل الدخول أولاً\n"
             "استخدم /start",
             reply_markup=main_menu_keyboard(
                 is_logged_in=False
-            ),
+            )
         )
         return False
     return True
 
 
-# ==================== القائمة الرئيسية ====================
+# ==================== تسجيل الهاندلرز ====================
 
-async def main_menu_callback(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE):
-    """العودة للقائمة الرئيسية"""
-    query   = update.callback_query
-    await query.answer()
-    user_id = update.effective_user.id
+def register_chats_handlers(bot: telebot.TeleBot):
+    """تسجيل كل هاندلرز القنوات"""
 
-    is_authorized = await telegram_service.manager.is_authorized(
-        user_id
+    # ==================== عرض القنوات ====================
+
+    @bot.callback_query_handler(
+        func=lambda c: c.data == "show_channels"
     )
+    def show_channels_callback(call: CallbackQuery):
+        asyncio.run(_show_channels(bot, call))
 
-    await query.message.reply_text(
-        "🏠 **القائمة الرئيسية**\n\n"
-        "اختر ما تريد 👇",
-        reply_markup=main_menu_keyboard(
-            is_logged_in=is_authorized
-        ),
-        parse_mode="Markdown",
-    )
+    async def _show_channels(
+            bot: telebot.TeleBot,
+            call: CallbackQuery):
+        from database import db
 
+        user_id = call.from_user.id
+        bot.answer_callback_query(call.id)
 
-# ==================== عرض أنواع المحادثات ====================
+        if not await require_login(bot, user_id):
+            return
 
-async def show_chat_types_callback(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE):
-    """عرض أنواع المحادثات"""
-    query = update.callback_query
-    await query.answer()
+        wait_msg = bot.send_message(
+            user_id,
+            "⏳ جاري تحميل قنواتك..."
+        )
 
-    if not await require_login(update, context):
-        return
+        result = await telegram_service.get_dialogs(
+            user_id
+        )
 
-    await query.message.reply_text(
-        "📂 **اختر نوع المحادثة**\n\n"
-        "من أي مكان تريد جلب المحتوى؟",
-        reply_markup=chat_type_keyboard(),
-        parse_mode="Markdown",
-    )
-
-
-# ==================== عرض القنوات ====================
-
-async def show_channels_callback(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE):
-    """عرض قائمة القنوات"""
-    query   = update.callback_query
-    await query.answer()
-    user_id = update.effective_user.id
-
-    if not await require_login(update, context):
-        return
-
-    wait_msg = await query.message.reply_text(
-        "⏳ جاري تحميل قنواتك..."
-    )
-
-    result = await telegram_service.get_dialogs(user_id)
-
-    await safe_delete_message(wait_msg)
-
-    if not result["success"]:
-        error = result.get("error", "")
-        if error == "session_expired":
-            await query.message.reply_text(
-                "❌ انتهت الجلسة\n"
-                "سجل دخول مجدداً /start"
+        try:
+            bot.delete_message(
+                user_id, wait_msg.message_id
             )
-        else:
-            await query.message.reply_text(
+        except Exception:
+            pass
+
+        if not result["success"]:
+            error = result.get("error", "")
+            if error == "session_expired":
+                bot.send_message(
+                    user_id,
+                    "❌ انتهت الجلسة\n"
+                    "سجل دخول مجدداً /start"
+                )
+            else:
+                bot.send_message(
+                    user_id,
+                    f"❌ خطأ: {result.get('message', '')}"
+                )
+            return
+
+        channels = result.get("channels", [])
+
+        if not channels:
+            bot.send_message(
+                user_id,
+                "📢 لا توجد قنوات\n\n"
+                "تأكد أنك مشترك في قنوات",
+                reply_markup=main_menu_keyboard(
+                    is_logged_in=True
+                )
+            )
+            return
+
+        # حفظ في قاعدة البيانات
+        for chat in channels:
+            await db.save_chat(
+                owner_id      = user_id,
+                chat_id       = chat["id"],
+                chat_title    = chat["title"],
+                chat_type     = "channel",
+                chat_username = chat.get("username"),
+                members_count = chat.get(
+                    "members_count", 0
+                ),
+            )
+
+        # حفظ في الحالة
+        set_state(
+            user_id,
+            STATE_IDLE,
+            channels=channels,
+            chat_type="channel"
+        )
+
+        bot.send_message(
+            user_id,
+            f"📢 **قنواتك** ({len(channels)})\n\n"
+            f"اختر القناة التي تريد أرشفتها 👇",
+            reply_markup=chats_keyboard(
+                channels, "channel", page=0
+            ),
+            parse_mode="Markdown"
+        )
+
+    # ==================== عرض المجموعات ====================
+
+    @bot.callback_query_handler(
+        func=lambda c: c.data == "show_groups"
+    )
+    def show_groups_callback(call: CallbackQuery):
+        asyncio.run(_show_groups(bot, call))
+
+    async def _show_groups(
+            bot: telebot.TeleBot,
+            call: CallbackQuery):
+        from database import db
+
+        user_id = call.from_user.id
+        bot.answer_callback_query(call.id)
+
+        if not await require_login(bot, user_id):
+            return
+
+        wait_msg = bot.send_message(
+            user_id,
+            "⏳ جاري تحميل مجموعاتك..."
+        )
+
+        result = await telegram_service.get_dialogs(
+            user_id
+        )
+
+        try:
+            bot.delete_message(
+                user_id, wait_msg.message_id
+            )
+        except Exception:
+            pass
+
+        if not result["success"]:
+            bot.send_message(
+                user_id,
                 f"❌ خطأ: {result.get('message', '')}"
             )
-        return
+            return
 
-    channels = result.get("channels", [])
+        groups = result.get("groups", [])
 
-    if not channels:
-        await query.message.reply_text(
-            "📢 لا توجد قنوات\n\n"
-            "تأكد أنك مشترك في قنوات",
-            reply_markup=main_menu_keyboard(
-                is_logged_in=True
+        if not groups:
+            bot.send_message(
+                user_id,
+                "👥 لا توجد مجموعات",
+                reply_markup=main_menu_keyboard(
+                    is_logged_in=True
+                )
+            )
+            return
+
+        for chat in groups:
+            await db.save_chat(
+                owner_id      = user_id,
+                chat_id       = chat["id"],
+                chat_title    = chat["title"],
+                chat_type     = "group",
+                chat_username = chat.get("username"),
+                members_count = chat.get(
+                    "members_count", 0
+                ),
+            )
+
+        set_state(
+            user_id,
+            STATE_IDLE,
+            groups=groups,
+            chat_type="group"
+        )
+
+        bot.send_message(
+            user_id,
+            f"👥 **مجموعاتك** ({len(groups)})\n\n"
+            f"اختر المجموعة التي تريد أرشفتها 👇",
+            reply_markup=chats_keyboard(
+                groups, "group", page=0
             ),
-        )
-        return
-
-    # حفظ القنوات في السياق
-    context.user_data["channels"] = channels
-    context.user_data["chat_type"] = "channel"
-
-    # حفظ في قاعدة البيانات
-    from database import db
-    for chat in channels:
-        await db.save_chat(
-            owner_id      = user_id,
-            chat_id       = chat["id"],
-            chat_title    = chat["title"],
-            chat_type     = "channel",
-            chat_username = chat.get("username"),
-            members_count = chat.get("members_count", 0),
+            parse_mode="Markdown"
         )
 
-    await query.message.reply_text(
-        f"📢 **قنواتك** ({len(channels)})\n\n"
-        f"اختر القناة التي تريد أرشفتها 👇",
-        reply_markup=chats_keyboard(
-            channels, "channel", page=0
-        ),
-        parse_mode="Markdown",
+    # ==================== عرض الكل ====================
+
+    @bot.callback_query_handler(
+        func=lambda c: c.data == "show_all_chats"
     )
+    def show_all_chats_callback(call: CallbackQuery):
+        asyncio.run(_show_all_chats(bot, call))
 
+    async def _show_all_chats(
+            bot: telebot.TeleBot,
+            call: CallbackQuery):
+        user_id = call.from_user.id
+        bot.answer_callback_query(call.id)
 
-# ==================== عرض المجموعات ====================
+        if not await require_login(bot, user_id):
+            return
 
-async def show_groups_callback(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE):
-    """عرض قائمة المجموعات"""
-    query   = update.callback_query
-    await query.answer()
-    user_id = update.effective_user.id
-
-    if not await require_login(update, context):
-        return
-
-    wait_msg = await query.message.reply_text(
-        "⏳ جاري تحميل مجموعاتك..."
-    )
-
-    result = await telegram_service.get_dialogs(user_id)
-
-    await safe_delete_message(wait_msg)
-
-    if not result["success"]:
-        await query.message.reply_text(
-            f"❌ خطأ: {result.get('message', '')}"
+        wait_msg = bot.send_message(
+            user_id,
+            "⏳ جاري تحميل كل محادثاتك..."
         )
-        return
 
-    groups = result.get("groups", [])
+        result = await telegram_service.get_dialogs(
+            user_id
+        )
 
-    if not groups:
-        await query.message.reply_text(
-            "👥 لا توجد مجموعات",
-            reply_markup=main_menu_keyboard(
-                is_logged_in=True
+        try:
+            bot.delete_message(
+                user_id, wait_msg.message_id
+            )
+        except Exception:
+            pass
+
+        if not result["success"]:
+            bot.send_message(
+                user_id,
+                f"❌ خطأ: {result.get('message', '')}"
+            )
+            return
+
+        all_chats = (
+            result.get("channels", []) +
+            result.get("groups", [])
+        )
+
+        if not all_chats:
+            bot.send_message(
+                user_id,
+                "❌ لا توجد محادثات",
+                reply_markup=main_menu_keyboard(
+                    is_logged_in=True
+                )
+            )
+            return
+
+        set_state(
+            user_id,
+            STATE_IDLE,
+            all_chats=all_chats,
+            chat_type="all"
+        )
+
+        bot.send_message(
+            user_id,
+            f"📂 **كل محادثاتك** ({len(all_chats)})\n\n"
+            f"اختر المحادثة 👇",
+            reply_markup=chats_keyboard(
+                all_chats, "all", page=0
             ),
-        )
-        return
-
-    context.user_data["groups"]    = groups
-    context.user_data["chat_type"] = "group"
-
-    from database import db
-    for chat in groups:
-        await db.save_chat(
-            owner_id      = user_id,
-            chat_id       = chat["id"],
-            chat_title    = chat["title"],
-            chat_type     = "group",
-            chat_username = chat.get("username"),
-            members_count = chat.get("members_count", 0),
+            parse_mode="Markdown"
         )
 
-    await query.message.reply_text(
-        f"👥 **مجموعاتك** ({len(groups)})\n\n"
-        f"اختر المجموعة التي تريد أرشفتها 👇",
-        reply_markup=chats_keyboard(
-            groups, "group", page=0
-        ),
-        parse_mode="Markdown",
+    # ==================== Pagination ====================
+
+    @bot.callback_query_handler(
+        func=lambda c: c.data.startswith("page_")
     )
+    def page_callback(call: CallbackQuery):
+        user_id = call.from_user.id
+        bot.answer_callback_query(call.id)
 
+        parts     = call.data.split("_")
+        chat_type = parts[1]
+        page      = int(parts[2])
 
-# ==================== عرض الكل ====================
+        chats_key = {
+            "channel": "channels",
+            "group":   "groups",
+            "all":     "all_chats",
+        }.get(chat_type, "all_chats")
 
-async def show_all_chats_callback(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE):
-    """عرض كل المحادثات"""
-    query   = update.callback_query
-    await query.answer()
-    user_id = update.effective_user.id
+        chats = get_user_data(user_id, chats_key) or []
 
-    if not await require_login(update, context):
-        return
+        if not chats:
+            bot.send_message(
+                user_id,
+                "❌ لا توجد بيانات\nابدأ من جديد"
+            )
+            return
 
-    wait_msg = await query.message.reply_text(
-        "⏳ جاري تحميل كل محادثاتك..."
-    )
-
-    result = await telegram_service.get_dialogs(user_id)
-
-    await safe_delete_message(wait_msg)
-
-    if not result["success"]:
-        await query.message.reply_text(
-            f"❌ خطأ: {result.get('message', '')}"
-        )
-        return
-
-    all_chats = (
-        result.get("channels", []) +
-        result.get("groups", [])
-    )
-
-    if not all_chats:
-        await query.message.reply_text(
-            "❌ لا توجد محادثات",
-            reply_markup=main_menu_keyboard(
-                is_logged_in=True
+        bot.send_message(
+            user_id,
+            f"📂 **المحادثات** ({len(chats)})\n\n"
+            f"اختر المحادثة 👇",
+            reply_markup=chats_keyboard(
+                chats, chat_type, page=page
             ),
+            parse_mode="Markdown"
         )
-        return
 
-    context.user_data["all_chats"] = all_chats
-    context.user_data["chat_type"] = "all"
+    # ==================== اختيار محادثة ====================
 
-    await query.message.reply_text(
-        f"📂 **كل محادثاتك** ({len(all_chats)})\n\n"
-        f"اختر المحادثة التي تريد أرشفتها 👇",
-        reply_markup=chats_keyboard(
-            all_chats, "all", page=0
-        ),
-        parse_mode="Markdown",
+    @bot.callback_query_handler(
+        func=lambda c: c.data.startswith("select_chat_")
     )
+    def select_chat_callback(call: CallbackQuery):
+        asyncio.run(_select_chat(bot, call))
 
+    async def _select_chat(
+            bot: telebot.TeleBot,
+            call: CallbackQuery):
+        user_id = call.from_user.id
+        bot.answer_callback_query(call.id)
 
-# ==================== Pagination ====================
+        parts     = call.data.split("_")
+        chat_type = parts[2]
+        index     = int(parts[3])
 
-async def page_callback(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE):
-    """التنقل بين الصفحات"""
-    query = update.callback_query
-    await query.answer()
+        chats_key = {
+            "channel": "channels",
+            "group":   "groups",
+            "all":     "all_chats",
+        }.get(chat_type, "all_chats")
 
-    # استخراج النوع والصفحة
-    # pattern: page_{chat_type}_{page}
-    parts     = query.data.split("_")
-    chat_type = parts[1]
-    page      = int(parts[2])
+        chats = get_user_data(user_id, chats_key) or []
 
-    chats_key = {
-        "channel": "channels",
-        "group":   "groups",
-        "all":     "all_chats",
-    }.get(chat_type, "all_chats")
+        if index >= len(chats):
+            bot.send_message(
+                user_id,
+                "❌ خطأ في الاختيار\nحاول مجدداً"
+            )
+            return
 
-    chats = context.user_data.get(chats_key, [])
+        selected = chats[index]
 
-    if not chats:
-        await query.message.reply_text(
-            "❌ لا توجد بيانات\n"
-            "ابدأ من جديد"
+        # حفظ المحادثة المختارة
+        set_state(
+            user_id,
+            STATE_IDLE,
+            selected_chat=selected,
         )
-        return
 
-    await safe_edit_message(
-        query.message,
-        f"📂 **المحادثات** ({len(chats)})\n\n"
-        f"اختر المحادثة 👇",
-        reply_markup=chats_keyboard(
-            chats, chat_type, page=page
-        ),
-        parse_mode="Markdown",
-    )
-
-
-# ==================== اختيار محادثة ====================
-
-async def select_chat_callback(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE):
-    """اختيار محادثة"""
-    query   = update.callback_query
-    await query.answer()
-    user_id = update.effective_user.id
-
-    # pattern: select_chat_{type}_{index}
-    parts     = query.data.split("_")
-    chat_type = parts[2]
-    index     = int(parts[3])
-
-    chats_key = {
-        "channel": "channels",
-        "group":   "groups",
-        "all":     "all_chats",
-    }.get(chat_type, "all_chats")
-
-    chats = context.user_data.get(chats_key, [])
-
-    if index >= len(chats):
-        await query.message.reply_text(
-            "❌ خطأ في الاختيار\n"
-            "حاول مجدداً"
+        wait_msg = bot.send_message(
+            user_id,
+            "⏳ جاري جلب معلومات المحادثة..."
         )
-        return
 
-    selected_chat = chats[index]
+        chat_info = await telegram_service.get_chat_info(
+            user_id, selected["entity"]
+        )
 
-    # حفظ المحادثة المختارة
-    context.user_data["selected_chat"] = selected_chat
-
-    # جلب معلومات تفصيلية
-    wait_msg = await query.message.reply_text(
-        "⏳ جاري جلب معلومات المحادثة..."
-    )
-
-    chat_info = await telegram_service.get_chat_info(
-        user_id,
-        selected_chat["entity"]
-    )
-
-    await safe_delete_message(wait_msg)
-
-    if chat_info:
-        context.user_data["chat_info"] = chat_info
-        total = chat_info.get("total_messages", 0)
-        members = chat_info.get("members_count", 0)
-        description = chat_info.get("description", "")
+        try:
+            bot.delete_message(
+                user_id, wait_msg.message_id
+            )
+        except Exception:
+            pass
 
         icon = (
             "📢" if chat_type == "channel"
             else "👥"
         )
 
-        details = (
-            f"{icon} **{selected_chat['title']}**\n\n"
-            f"👥 الأعضاء: `{format_number(members)}`\n"
-            f"💬 الرسائل: `{format_number(total)}`\n"
-        )
+        if chat_info:
+            total   = chat_info.get("total_messages", 0)
+            members = chat_info.get("members_count", 0)
+            desc    = chat_info.get("description", "")
 
-        if description:
-            details += (
-                f"📝 الوصف: "
-                f"`{description[:100]}`\n"
+            details = (
+                f"{icon} **{selected['title']}**\n\n"
+                f"👥 الأعضاء: `{format_number(members)}`\n"
+                f"💬 الرسائل: `{format_number(total)}`\n"
             )
 
-        if selected_chat.get("username"):
-            details += (
-                f"🔗 اليوزرنيم: "
-                f"`{selected_chat['username']}`\n"
+            if desc:
+                details += (
+                    f"📝 الوصف: `{desc[:100]}`\n"
+                )
+
+            if selected.get("username"):
+                details += (
+                    f"🔗 اليوزرنيم: "
+                    f"`{selected['username']}`\n"
+                )
+        else:
+            details = (
+                f"{icon} **{selected['title']}**\n\n"
             )
 
         details += "\n📌 **اختر نوع المحتوى** 👇"
 
-    else:
-        details = (
-            f"✅ **{selected_chat['title']}**\n\n"
-            f"📌 **اختر نوع المحتوى** 👇"
+        bot.send_message(
+            user_id,
+            details,
+            reply_markup=content_type_keyboard(),
+            parse_mode="Markdown"
         )
 
-    await query.message.reply_text(
-        details,
-        reply_markup=content_type_keyboard(),
-        parse_mode="Markdown",
+        activity_logger.log(
+            user_id,
+            "SELECT_CHAT",
+            f"chat={selected['title']}"
+        )
+
+    # ==================== البحث بـ Username ====================
+
+    @bot.callback_query_handler(
+        func=lambda c: c.data == "search_username"
     )
+    def search_username_callback(call: CallbackQuery):
+        asyncio.run(_search_username(bot, call))
 
-    activity_logger.log(
-        user_id,
-        "SELECT_CHAT",
-        f"chat={selected_chat['title']}"
-    )
+    async def _search_username(
+            bot: telebot.TeleBot,
+            call: CallbackQuery):
+        user_id = call.from_user.id
+        bot.answer_callback_query(call.id)
 
+        if not await require_login(bot, user_id):
+            return
 
-# ==================== البحث بـ Username ====================
+        set_state(user_id, STATE_WAITING_USERNAME)
 
-async def search_username_callback(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE):
-    """بحث عن قناة بالـ username"""
-    query = update.callback_query
-    await query.answer()
-
-    if not await require_login(update, context):
-        return
-
-    await query.message.reply_text(
-        "🔍 **البحث عن قناة**\n\n"
-        "أرسل يوزرنيم القناة أو المجموعة\n"
-        "مثال: `@channel_name`",
-        reply_markup=cancel_keyboard(),
-        parse_mode="Markdown",
-    )
-    return WAITING_USERNAME
-
-
-async def receive_username(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE):
-    """استقبال username للبحث"""
-    user_id  = update.effective_user.id
-    username = update.message.text.strip()
-
-    # تنظيف الـ username
-    if not username.startswith("@"):
-        username = f"@{username}"
-
-    wait_msg = await update.message.reply_text(
-        f"⏳ جاري البحث عن {username}..."
-    )
-
-    result = await telegram_service.get_entity_by_username(
-        user_id, username
-    )
-
-    await safe_delete_message(wait_msg)
-
-    if not result or not result.get("success"):
-        await update.message.reply_text(
-            f"❌ لم يتم العثور على {username}\n\n"
-            "تأكد من الـ username وحاول مجدداً",
+        bot.send_message(
+            user_id,
+            "🔍 **البحث عن قناة**\n\n"
+            "أرسل يوزرنيم القناة أو المجموعة\n"
+            "مثال: `@channel_name`",
             reply_markup=cancel_keyboard(),
+            parse_mode="Markdown"
         )
-        return WAITING_USERNAME
 
-    # حفظ المحادثة المختارة
-    context.user_data["selected_chat"] = result
-    context.user_data["chat_info"]     = result
-
-    icon = (
-        "📢" if result.get("type") == "channel"
-        else "👥"
+    @bot.message_handler(
+        func=lambda m: get_state(
+            m.from_user.id
+        ) == STATE_WAITING_USERNAME
     )
+    def receive_username(message: Message):
+        asyncio.run(_receive_username(bot, message))
 
-    await update.message.reply_text(
-        f"✅ **تم العثور على:**\n\n"
-        f"{icon} **{result.get('title', '')}**\n"
-        f"👥 الأعضاء: "
-        f"`{format_number(result.get('members_count', 0))}`\n\n"
-        f"📌 **اختر نوع المحتوى** 👇",
-        reply_markup=content_type_keyboard(),
-        parse_mode="Markdown",
+    async def _receive_username(
+            bot: telebot.TeleBot,
+            message: Message):
+        user_id  = message.from_user.id
+        username = message.text.strip()
+
+        if not username.startswith("@"):
+            username = f"@{username}"
+
+        wait_msg = bot.send_message(
+            user_id,
+            f"⏳ جاري البحث عن {username}..."
+        )
+
+        result = await telegram_service.get_entity_by_username(
+            user_id, username
+        )
+
+        try:
+            bot.delete_message(
+                user_id, wait_msg.message_id
+            )
+        except Exception:
+            pass
+
+        if not result or not result.get("success"):
+            bot.send_message(
+                user_id,
+                f"❌ لم يتم العثور على {username}\n\n"
+                "تأكد من الـ username وحاول مجدداً",
+                reply_markup=cancel_keyboard()
+            )
+            return
+
+        set_state(
+            user_id,
+            STATE_IDLE,
+            selected_chat=result,
+        )
+
+        icon = (
+            "📢" if result.get("type") == "channel"
+            else "👥"
+        )
+
+        bot.send_message(
+            user_id,
+            f"✅ **تم العثور على:**\n\n"
+            f"{icon} **{result.get('title', '')}**\n"
+            f"👥 الأعضاء: "
+            f"`{format_number(result.get('members_count', 0))}`\n\n"
+            f"📌 **اختر نوع المحتوى** 👇",
+            reply_markup=content_type_keyboard(),
+            parse_mode="Markdown"
+        )
+
+        clear_state(user_id)
+
+    # ==================== أنواع المحادثات ====================
+
+    @bot.callback_query_handler(
+        func=lambda c: c.data == "show_chat_types"
     )
+    def show_chat_types_callback(call: CallbackQuery):
+        asyncio.run(_show_chat_types(bot, call))
 
-    return ConversationHandler.END
+    async def _show_chat_types(
+            bot: telebot.TeleBot,
+            call: CallbackQuery):
+        user_id = call.from_user.id
+        bot.answer_callback_query(call.id)
 
+        if not await require_login(bot, user_id):
+            return
 
-# ==================== ConversationHandler ====================
-
-def get_chats_handler() -> ConversationHandler:
-    """إنشاء ConversationHandler للقنوات"""
-    return ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(
-                search_username_callback,
-                pattern="^search_username$"
-            ),
-        ],
-        states={
-            WAITING_USERNAME: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    receive_username
-                )
-            ],
-        },
-        fallbacks=[
-            CallbackQueryHandler(
-                main_menu_callback,
-                pattern="^main_menu$"
-            ),
-        ],
-        allow_reentry=True,
-    )
-
-
-# ==================== تسجيل الهاندلرز ====================
-
-def register_chats_handlers(app):
-    """تسجيل كل هاندلرز القنوات"""
-
-    app.add_handler(get_chats_handler())
-
-    app.add_handler(CallbackQueryHandler(
-        main_menu_callback,
-        pattern="^main_menu$"
-    ))
-    app.add_handler(CallbackQueryHandler(
-        show_chat_types_callback,
-        pattern="^show_chat_types$"
-    ))
-    app.add_handler(CallbackQueryHandler(
-        show_channels_callback,
-        pattern="^show_channels$"
-    ))
-    app.add_handler(CallbackQueryHandler(
-        show_groups_callback,
-        pattern="^show_groups$"
-    ))
-    app.add_handler(CallbackQueryHandler(
-        show_all_chats_callback,
-        pattern="^show_all_chats$"
-    ))
-    app.add_handler(CallbackQueryHandler(
-        page_callback,
-        pattern="^page_"
-    ))
-    app.add_handler(CallbackQueryHandler(
-        select_chat_callback,
-        pattern="^select_chat_"
-    ))
+        bot.send_message(
+            user_id,
+            "📂 **اختر نوع المحادثة**\n\n"
+            "من أي مكان تريد جلب المحتوى؟",
+            reply_markup=chat_type_keyboard(),
+            parse_mode="Markdown"
+        )
