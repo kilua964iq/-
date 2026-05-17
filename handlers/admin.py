@@ -1,6 +1,3 @@
-## الملف الخامس عشر: `handlers/admin.py`
-
-```python
 import asyncio
 from datetime import datetime
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
