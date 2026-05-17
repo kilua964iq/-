@@ -38,17 +38,17 @@ class Task:
             priority: TaskPriority = TaskPriority.NORMAL,
             data: dict = None):
 
-        self.task_id    = task_id
-        self.owner_id   = owner_id
-        self.task_type  = task_type
-        self.coroutine  = coroutine
-        self.priority   = priority
-        self.data       = data or {}
+        self.task_id   = task_id
+        self.owner_id  = owner_id
+        self.task_type = task_type
+        self.coroutine = coroutine
+        self.priority  = priority
+        self.data      = data or {}
 
-        self.status     = TaskStatus.PENDING
-        self.progress   = 0
-        self.result     = None
-        self.error      = None
+        self.status   = TaskStatus.PENDING
+        self.progress = 0
+        self.result   = None
+        self.error    = None
 
         self.created_at   = datetime.now()
         self.started_at   = None
@@ -81,13 +81,13 @@ class QueueService:
     """نظام طابور المهام الكامل"""
 
     def __init__(self):
-        self._tasks: Dict[int, Task]     = {}
+        self._tasks: Dict[int, Task]       = {}
         self._queue: asyncio.PriorityQueue = (
             asyncio.PriorityQueue()
         )
-        self._workers: list              = []
-        self._running                    = False
-        self._callbacks: Dict[str, list] = {
+        self._workers: list                = []
+        self._running                      = False
+        self._callbacks: Dict[str, list]   = {
             "on_start":    [],
             "on_progress": [],
             "on_complete": [],
@@ -96,17 +96,17 @@ class QueueService:
         }
         self._task_counter = 0
 
-    # ==================== تشغيل الطابور ====================
+    # ==================== تشغيل ====================
 
-    async def start(
-            self,
-            num_workers: int = None):
+    async def start(self, num_workers: int = None):
         """تشغيل الطابور"""
         if self._running:
             return
 
         self._running = True
-        num_workers = num_workers or config.MAX_CONCURRENT_TASKS
+        num_workers   = (
+            num_workers or config.MAX_CONCURRENT_TASKS
+        )
 
         for i in range(num_workers):
             worker = asyncio.create_task(
@@ -116,6 +116,10 @@ class QueueService:
 
         bot_logger.info(
             f"✅ تم تشغيل الطابور بـ {num_workers} عمال"
+        )
+        print(
+            f"✅ تم تشغيل الطابور بـ {num_workers} عمال",
+            flush=True
         )
 
     async def stop(self):
@@ -134,7 +138,6 @@ class QueueService:
 
         while self._running:
             try:
-                # جلب مهمة من الطابور
                 priority, task_id = await asyncio.wait_for(
                     self._queue.get(),
                     timeout=1.0
@@ -148,7 +151,9 @@ class QueueService:
                     self._queue.task_done()
                     continue
 
-                await self._execute_task(task, worker_name)
+                await self._execute_task(
+                    task, worker_name
+                )
                 self._queue.task_done()
 
             except asyncio.TimeoutError:
@@ -199,7 +204,9 @@ class QueueService:
         except asyncio.CancelledError:
             task.status       = TaskStatus.CANCELLED
             task.completed_at = datetime.now()
-            await self._trigger_callback("on_cancel", task)
+            await self._trigger_callback(
+                "on_cancel", task
+            )
 
         except Exception as e:
             task.status       = TaskStatus.FAILED
@@ -209,7 +216,9 @@ class QueueService:
             error_logger.log_exception(
                 e, f"task_{task.task_id}"
             )
-            await self._trigger_callback("on_error", task)
+            await self._trigger_callback(
+                "on_error", task
+            )
 
     # ==================== إدارة المهام ====================
 
@@ -234,7 +243,6 @@ class QueueService:
 
         self._tasks[task.task_id] = task
 
-        # الأولوية معكوسة (أصغر = أعلى)
         await self._queue.put(
             (-priority.value, task.task_id)
         )
@@ -332,8 +340,8 @@ class QueueService:
     # ==================== استعلامات ====================
 
     def get_task(
-            self, task_id: int) -> Optional[Task]:
-        """جلب مهمة"""
+            self,
+            task_id: int) -> Optional[Task]:
         return self._tasks.get(task_id)
 
     def get_user_tasks(
@@ -360,14 +368,14 @@ class QueueService:
             self,
             owner_id: int = None) -> list:
         """جلب المهام النشطة"""
-        active_statuses = [
+        active = [
             TaskStatus.PENDING,
             TaskStatus.RUNNING,
             TaskStatus.PAUSED,
         ]
         tasks = [
             t for t in self._tasks.values()
-            if t.status in active_statuses
+            if t.status in active
         ]
         if owner_id:
             tasks = [
@@ -380,55 +388,50 @@ class QueueService:
         """إحصائيات الطابور"""
         all_tasks = list(self._tasks.values())
         return {
-            "total":     len(all_tasks),
-            "pending":   sum(
+            "total":      len(all_tasks),
+            "pending":    sum(
                 1 for t in all_tasks
                 if t.status == TaskStatus.PENDING
             ),
-            "running":   sum(
+            "running":    sum(
                 1 for t in all_tasks
                 if t.status == TaskStatus.RUNNING
             ),
-            "paused":    sum(
+            "paused":     sum(
                 1 for t in all_tasks
                 if t.status == TaskStatus.PAUSED
             ),
-            "completed": sum(
+            "completed":  sum(
                 1 for t in all_tasks
                 if t.status == TaskStatus.COMPLETED
             ),
-            "failed":    sum(
+            "failed":     sum(
                 1 for t in all_tasks
                 if t.status == TaskStatus.FAILED
             ),
-            "cancelled": sum(
+            "cancelled":  sum(
                 1 for t in all_tasks
                 if t.status == TaskStatus.CANCELLED
             ),
-            "workers":   len(self._workers),
+            "workers":    len(self._workers),
             "queue_size": self._queue.qsize(),
         }
 
     # ==================== Callbacks ====================
 
     def on_start(self, callback: Callable):
-        """callback عند بدء مهمة"""
         self._callbacks["on_start"].append(callback)
 
     def on_progress(self, callback: Callable):
-        """callback عند تحديث التقدم"""
         self._callbacks["on_progress"].append(callback)
 
     def on_complete(self, callback: Callable):
-        """callback عند اكتمال مهمة"""
         self._callbacks["on_complete"].append(callback)
 
     def on_error(self, callback: Callable):
-        """callback عند فشل مهمة"""
         self._callbacks["on_error"].append(callback)
 
     def on_cancel(self, callback: Callable):
-        """callback عند إلغاء مهمة"""
         self._callbacks["on_cancel"].append(callback)
 
     async def _trigger_callback(
@@ -450,9 +453,8 @@ class QueueService:
     # ==================== تنظيف ====================
 
     def cleanup_completed(
-            self,
-            keep_last: int = 100):
-        """تنظيف المهام المكتملة القديمة"""
+            self, keep_last: int = 100):
+        """تنظيف المهام القديمة"""
         completed = [
             t for t in self._tasks.values()
             if t.status in [
@@ -472,8 +474,7 @@ class QueueService:
 
         if to_remove:
             bot_logger.debug(
-                f"🗑️ تم حذف {len(to_remove)} "
-                f"مهمة قديمة"
+                f"🗑️ تم حذف {len(to_remove)} مهمة قديمة"
             )
 
 
