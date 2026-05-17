@@ -14,3 +14,4 @@ APScheduler==3.10.4
 requests==2.31.0
 httpx==0.25.0
 flask==3.0.1
+nest_asyncio==1.6.0
