@@ -1,7 +1,7 @@
 import asyncio
 import os
-from typing import Optional, List, AsyncGenerator
-from telethon import TelegramClient, events
+from typing import Optional, AsyncGenerator
+from telethon import TelegramClient
 from telethon.tl.types import (
     Channel, Chat, User,
     MessageMediaPhoto,
@@ -13,10 +13,13 @@ from telethon.errors import (
     PhoneCodeInvalidError,
     PhoneNumberInvalidError,
     AuthKeyUnregisteredError,
-    UserDeactivatedError,
 )
 from config import config
-from utils.logger import bot_logger, activity_logger, error_logger
+from utils.logger import (
+    bot_logger,
+    activity_logger,
+    error_logger,
+)
 from utils.helpers import (
     get_chat_type,
     get_members_count,
@@ -42,8 +45,8 @@ class ClientManager:
             f"user_{user_id}"
         )
 
-    async def get_client(self,
-                         user_id: int) -> TelegramClient:
+    async def get_client(
+            self, user_id: int) -> TelegramClient:
         """الحصول على client أو إنشاء جديد"""
         if user_id in self._clients:
             client = self._clients[user_id]
@@ -74,7 +77,8 @@ class ClientManager:
                 await client.disconnect()
             del self._clients[user_id]
 
-    async def is_authorized(self, user_id: int) -> bool:
+    async def is_authorized(
+            self, user_id: int) -> bool:
         """التحقق من تسجيل الدخول"""
         try:
             client = await self.get_client(user_id)
@@ -98,9 +102,10 @@ class TelegramService:
 
     # ==================== تسجيل الدخول ====================
 
-    async def send_code(self,
-                        user_id: int,
-                        phone: str) -> dict:
+    async def send_code(
+            self,
+            user_id: int,
+            phone: str) -> dict:
         """إرسال كود التحقق"""
         try:
             client = await self.manager.get_client(user_id)
@@ -127,18 +132,21 @@ class TelegramService:
                 "seconds": e.seconds
             }
         except Exception as e:
-            error_logger.log_exception(e, "send_code", user_id)
+            error_logger.log_exception(
+                e, "send_code", user_id
+            )
             return {
                 "success": False,
                 "error": "unknown",
                 "message": str(e)
             }
 
-    async def sign_in(self,
-                      user_id: int,
-                      phone: str,
-                      code: str,
-                      phone_code_hash: str) -> dict:
+    async def sign_in(
+            self,
+            user_id: int,
+            phone: str,
+            code: str,
+            phone_code_hash: str) -> dict:
         """تسجيل الدخول بالكود"""
         try:
             client = await self.manager.get_client(user_id)
@@ -148,9 +156,6 @@ class TelegramService:
                 phone_code_hash=phone_code_hash
             )
             activity_logger.log_login(user_id, phone)
-            bot_logger.info(
-                f"✅ تسجيل دخول ناجح للمستخدم {user_id}"
-            )
             return {
                 "success": True,
                 "user": user,
@@ -178,23 +183,23 @@ class TelegramService:
                 "seconds": e.seconds
             }
         except Exception as e:
-            error_logger.log_exception(e, "sign_in", user_id)
+            error_logger.log_exception(
+                e, "sign_in", user_id
+            )
             return {
                 "success": False,
                 "error": "unknown",
                 "message": str(e)
             }
 
-    async def sign_in_password(self,
-                               user_id: int,
-                               password: str) -> dict:
+    async def sign_in_password(
+            self,
+            user_id: int,
+            password: str) -> dict:
         """تسجيل الدخول بكلمة المرور الثنائية"""
         try:
             client = await self.manager.get_client(user_id)
             user = await client.sign_in(password=password)
-            bot_logger.info(
-                f"✅ تسجيل دخول بكلمة مرور للمستخدم {user_id}"
-            )
             return {"success": True, "user": user}
         except Exception as e:
             error_logger.log_exception(
@@ -213,65 +218,68 @@ class TelegramService:
             await client.log_out()
             await self.manager.disconnect_client(user_id)
 
-            # حذف ملف الجلسة
             session_path = (
-                self.manager.get_session_path(user_id) + ".session"
+                self.manager.get_session_path(user_id)
+                + ".session"
             )
             if os.path.exists(session_path):
                 os.remove(session_path)
 
             activity_logger.log_logout(user_id)
-            bot_logger.info(
-                f"✅ تسجيل خروج للمستخدم {user_id}"
-            )
             return True
         except Exception as e:
-            error_logger.log_exception(e, "logout", user_id)
+            error_logger.log_exception(
+                e, "logout", user_id
+            )
             return False
 
-    async def get_me(self, user_id: int) -> Optional[dict]:
+    async def get_me(
+            self, user_id: int) -> Optional[dict]:
         """معلومات الحساب الحالي"""
         try:
             client = await self.manager.get_client(user_id)
             me = await client.get_me()
             return {
-                "id": me.id,
+                "id":         me.id,
                 "first_name": me.first_name,
-                "last_name": me.last_name or "",
-                "username": me.username or "",
-                "phone": me.phone or "",
-                "full_name": (
-                    f"{me.first_name} {me.last_name or ''}".strip()
+                "last_name":  me.last_name or "",
+                "username":   me.username or "",
+                "phone":      me.phone or "",
+                "full_name":  (
+                    f"{me.first_name} "
+                    f"{me.last_name or ''}".strip()
                 ),
             }
         except Exception as e:
-            error_logger.log_exception(e, "get_me", user_id)
+            error_logger.log_exception(
+                e, "get_me", user_id
+            )
             return None
 
     # ==================== جلب القنوات ====================
 
-    async def get_dialogs(self,
-                          user_id: int) -> dict:
+    async def get_dialogs(
+            self, user_id: int) -> dict:
         """جلب كل القنوات والمجموعات"""
         try:
             client = await self.manager.get_client(user_id)
             dialogs = await client.get_dialogs()
 
             channels = []
-            groups = []
-            private = []
+            groups   = []
+            private  = []
 
             for dialog in dialogs:
-                entity = dialog.entity
+                entity    = dialog.entity
                 chat_type = get_chat_type(entity)
 
                 chat_data = {
-                    "id": entity.id,
-                    "title": dialog.name or "بدون اسم",
-                    "type": chat_type,
-                    "username": extract_username(entity),
+                    "id":            entity.id,
+                    "title":         dialog.name or "بدون اسم",
+                    "type":          chat_type,
+                    "username":      extract_username(entity),
                     "members_count": get_members_count(entity),
-                    "entity": entity,
+                    "entity":        entity,
                 }
 
                 if chat_type == "channel":
@@ -281,24 +289,19 @@ class TelegramService:
                 elif chat_type == "private":
                     private.append(chat_data)
 
-            bot_logger.info(
-                f"✅ جلب {len(dialogs)} محادثة "
-                f"للمستخدم {user_id}"
-            )
-
             return {
-                "success": True,
+                "success":  True,
                 "channels": channels,
-                "groups": groups,
-                "private": private,
-                "total": len(dialogs),
+                "groups":   groups,
+                "private":  private,
+                "total":    len(dialogs),
             }
 
         except AuthKeyUnregisteredError:
             await self.manager.disconnect_client(user_id)
             return {
                 "success": False,
-                "error": "session_expired",
+                "error":   "session_expired",
                 "message": "انتهت الجلسة، سجل دخول مجدداً"
             }
         except Exception as e:
@@ -307,7 +310,7 @@ class TelegramService:
             )
             return {
                 "success": False,
-                "error": "unknown",
+                "error":   "unknown",
                 "message": str(e)
             }
 
@@ -318,17 +321,17 @@ class TelegramService:
         """جلب قناة بالـ username"""
         try:
             client = await self.manager.get_client(user_id)
-            entity = await client.get_entity(username)
+            entity    = await client.get_entity(username)
             chat_type = get_chat_type(entity)
 
             return {
-                "success": True,
-                "id": entity.id,
-                "title": getattr(entity, "title", username),
-                "type": chat_type,
-                "username": extract_username(entity),
+                "success":       True,
+                "id":            entity.id,
+                "title":         getattr(entity, "title", username),
+                "type":          chat_type,
+                "username":      extract_username(entity),
                 "members_count": get_members_count(entity),
-                "entity": entity,
+                "entity":        entity,
             }
         except Exception as e:
             error_logger.log_exception(
@@ -336,7 +339,7 @@ class TelegramService:
             )
             return {
                 "success": False,
-                "error": "not_found",
+                "error":   "not_found",
                 "message": "لم يتم العثور على القناة"
             }
 
@@ -353,57 +356,61 @@ class TelegramService:
             progress_callback=None) -> AsyncGenerator:
         """جلب الرسائل مع معالجة FloodWait"""
 
-        client = await self.manager.get_client(user_id)
+        client  = await self.manager.get_client(user_id)
         fetched = 0
-        stats = {
-            "text": 0,
-            "photos": 0,
-            "videos": 0,
-            "files": 0,
-            "audio": 0,
-            "voice": 0,
-            "stickers": 0,
-            "total": 0,
+        stats   = {
+            "text":       0,
+            "photos":     0,
+            "videos":     0,
+            "files":      0,
+            "audio":      0,
+            "voice":      0,
+            "stickers":   0,
+            "total":      0,
         }
 
         try:
             async for message in client.iter_messages(
                 entity,
-                limit=limit if limit > 0 else None,
-                offset_date=offset_date,
-                offset_id=offset_id,
-                reverse=False,
+                limit      = limit if limit > 0 else None,
+                offset_date = offset_date,
+                offset_id   = offset_id,
+                reverse     = False,
             ):
                 if not message or not message.id:
                     continue
 
                 msg_type = classify_message(message)
 
-                # تصفية حسب النوع
-                if content_type != "all" and msg_type != content_type:
+                if (content_type != "all" and
+                        msg_type != content_type):
                     continue
 
-                stats[msg_type] = stats.get(msg_type, 0) + 1
+                stats[msg_type] = (
+                    stats.get(msg_type, 0) + 1
+                )
                 stats["total"] += 1
-                fetched += 1
+                fetched        += 1
 
-                # callback للتقدم
-                if progress_callback and fetched % 10 == 0:
-                    await progress_callback(fetched, stats)
+                if (progress_callback and
+                        fetched % 10 == 0):
+                    await progress_callback(
+                        fetched, stats
+                    )
 
                 yield {
                     "message": message,
-                    "type": msg_type,
-                    "stats": stats,
+                    "type":    msg_type,
+                    "stats":   stats,
                 }
 
-                # تجنب الحظر
                 await asyncio.sleep(0.05)
 
         except FloodWaitError as e:
             error_logger.log_flood_wait(e.seconds, user_id)
             bot_logger.warning(
-                f"⚠️ FloodWait {e.seconds}s للمستخدم {user_id}"
+                f"⚠️ FloodWait {e.seconds}s "
+                f"للمستخدم {user_id}"
             )
             await asyncio.sleep(e.seconds)
 
@@ -434,7 +441,6 @@ class TelegramService:
                 )
                 return count.total
 
-            # عد بالتصفية
             count = 0
             async for msg in client.iter_messages(
                 entity, limit=None
@@ -462,27 +468,21 @@ class TelegramService:
             if not message.media:
                 return None
 
-            client = await self.manager.get_client(user_id)
+            client    = await self.manager.get_client(user_id)
             file_name = get_file_name(message, msg_type)
             file_path = get_download_path(
                 user_id, chat_id, msg_type, file_name
             )
 
-            # تحقق إذا الملف موجود مسبقاً
             if os.path.exists(file_path):
                 return file_path
 
-            # تحميل الملف
             downloaded = await client.download_media(
                 message,
                 file=file_path,
             )
 
             if downloaded:
-                bot_logger.debug(
-                    f"✅ تم تحميل {file_name} "
-                    f"للمستخدم {user_id}"
-                )
                 return downloaded
 
             return None
@@ -494,9 +494,7 @@ class TelegramService:
 
         except Exception as e:
             error_logger.log_download_error(
-                user_id,
-                str(message.id),
-                str(e)
+                user_id, str(message.id), str(e)
             )
             return None
 
@@ -509,20 +507,20 @@ class TelegramService:
         """معلومات تفصيلية عن قناة"""
         try:
             client = await self.manager.get_client(user_id)
-            full = await client.get_entity(entity)
+            full   = await client.get_entity(entity)
 
             total_messages = await client.get_messages(
                 entity, limit=0
             )
 
             return {
-                "id": full.id,
-                "title": getattr(full, "title", ""),
-                "username": extract_username(full),
-                "members_count": get_members_count(full),
+                "id":             full.id,
+                "title":          getattr(full, "title", ""),
+                "username":       extract_username(full),
+                "members_count":  get_members_count(full),
                 "total_messages": total_messages.total,
-                "type": get_chat_type(full),
-                "description": getattr(
+                "type":           get_chat_type(full),
+                "description":    getattr(
                     full, "about", ""
                 ) or "",
             }
