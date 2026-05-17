@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import nest_asyncio
 import telebot
 from telebot.types import Message, CallbackQuery
@@ -54,20 +55,17 @@ def get_user_data(user_id: int, key: str):
 
 def run_async(coro):
     """تشغيل coroutine بشكل آمن"""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(
-                    asyncio.run, coro
-                )
-                return future.result()
-        else:
-            return loop.run_until_complete(coro)
-    except Exception as e:
-        print(f"❌ خطأ في run_async: {e}", flush=True)
-        return None
+    def run_in_thread():
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        try:
+            return new_loop.run_until_complete(coro)
+        finally:
+            new_loop.close()
+
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        future = pool.submit(run_in_thread)
+        return future.result(timeout=60)
 
 
 # ==================== تسجيل الهاندلرز ====================
@@ -130,7 +128,7 @@ def register_auth_handlers(bot: telebot.TeleBot):
                     f"**ماذا أستطيع أن أفعل؟**\n"
                     f"📋 جلب وأرشفة محتوى قنواتك\n"
                     f"🖼️ حفظ الصور والفيديوهات والملفات\n"
-                    f"🤖 تلخيص وتصنيف المحتوى بالذكاء الاصطناعي\n"
+                    f"🤖 تلخيص وتصنيف المحتوى\n"
                     f"📊 إحصائيات تفصيلية\n"
                     f"🔍 بحث في المحتوى المحفوظ\n"
                     f"💳 استخراج ذكي للبيانات\n\n"
@@ -154,7 +152,7 @@ def register_auth_handlers(bot: telebot.TeleBot):
             "/start - بدء البوت\n"
             "/help - المساعدة\n"
             "/status - حالة الحساب\n"
-            "/cancel - إلغاء العملية الحالية\n\n"
+            "/cancel - إلغاء العملية\n\n"
             "**كيفية الاستخدام:**\n"
             "1️⃣ سجل دخول بحسابك\n"
             "2️⃣ اختر قناة أو مجموعة\n"
@@ -172,7 +170,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
     @bot.message_handler(commands=["status"])
     def status_command(message: Message):
         from database import db
-
         user_id = message.from_user.id
 
         async def _status():
@@ -183,7 +180,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
             if is_authorized:
                 me    = await telegram_service.get_me(user_id)
                 stats = await db.get_stats(user_id)
-
                 bot.send_message(
                     user_id,
                     f"✅ **حالة الحساب**\n\n"
@@ -221,7 +217,7 @@ def register_auth_handlers(bot: telebot.TeleBot):
             )
         )
 
-    # ==================== login callback ====================
+    # ==================== login ====================
 
     @bot.callback_query_handler(
         func=lambda c: c.data == "login"
@@ -229,9 +225,7 @@ def register_auth_handlers(bot: telebot.TeleBot):
     def login_callback(call: CallbackQuery):
         user_id = call.from_user.id
         bot.answer_callback_query(call.id)
-
         set_state(user_id, STATE_WAITING_PHONE)
-
         bot.send_message(
             user_id,
             "📱 **تسجيل الدخول**\n\n"
@@ -261,8 +255,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
                 parse_mode="Markdown"
             )
             return
-
-        set_state(user_id, STATE_WAITING_PHONE, phone=phone)
 
         wait_msg = bot.send_message(
             user_id,
@@ -299,12 +291,11 @@ def register_auth_handlers(bot: telebot.TeleBot):
             else:
                 error = result.get("error", "")
                 clear_state(user_id)
-
                 if error == "flood_wait":
                     seconds = result.get("seconds", 60)
                     bot.send_message(
                         user_id,
-                        f"⚠️ انتظر {seconds} ثانية وحاول مجدداً",
+                        f"⚠️ انتظر {seconds} ثانية",
                         reply_markup=login_keyboard()
                     )
                 else:
@@ -325,7 +316,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
     )
     def receive_code(message: Message):
         from database import db
-
         user_id = message.from_user.id
         code    = message.text.strip().replace(
             " ", ""
@@ -383,7 +373,7 @@ def register_auth_handlers(bot: telebot.TeleBot):
             if error == "code_invalid":
                 bot.send_message(
                     user_id,
-                    "❌ الكود غير صحيح أو منتهي\n"
+                    "❌ الكود غير صحيح\n"
                     "أرسل الكود مجدداً",
                     reply_markup=cancel_keyboard()
                 )
@@ -398,7 +388,7 @@ def register_auth_handlers(bot: telebot.TeleBot):
 
         run_async(_sign_in())
 
-    # ==================== استقبال كلمة المرور ====================
+    # ==================== كلمة المرور ====================
 
     @bot.message_handler(
         func=lambda m: get_state(
@@ -407,7 +397,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
     )
     def receive_password(message: Message):
         from database import db
-
         user_id  = message.from_user.id
         password = message.text.strip()
 
@@ -444,8 +433,7 @@ def register_auth_handlers(bot: telebot.TeleBot):
 
             bot.send_message(
                 user_id,
-                "❌ كلمة المرور غير صحيحة\n"
-                "أرسل كلمة المرور مجدداً",
+                "❌ كلمة المرور غير صحيحة",
                 reply_markup=cancel_keyboard()
             )
 
@@ -486,7 +474,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
     def logout_callback(call: CallbackQuery):
         user_id = call.from_user.id
         bot.answer_callback_query(call.id)
-
         from utils.keyboards import confirm_keyboard
         bot.send_message(
             user_id,
@@ -499,7 +486,6 @@ def register_auth_handlers(bot: telebot.TeleBot):
     )
     def confirm_logout_callback(call: CallbackQuery):
         from database import db
-
         user_id = call.from_user.id
         bot.answer_callback_query(call.id)
 
