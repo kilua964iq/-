@@ -3,6 +3,7 @@ import asyncio
 import aiofiles
 import zipfile
 import shutil
+import re
 from typing import Optional, List
 from datetime import datetime, timedelta
 from config import config
@@ -10,107 +11,13 @@ from utils.logger import bot_logger, error_logger
 from utils.helpers import (
     format_size,
     safe_filename,
-    get_download_path,
-    save_as_txt,
     smart_extract,
     format_extracted_data,
     clean_text,
 )
 
 
-# ==================== إدارة التحميل ====================
-
 class DownloadManager:
-    """إدارة تحميل وحفظ الملفات"""
-
-    def __init__(self):
-        self.active_downloads = {}
-
-    # ==================== حفظ النصوص ====================
-
-    async def save_text_as_file(
-            self,
-            owner_id: int,
-            chat_id: int,
-            message_id: int,
-            text: str,
-            date: datetime = None) -> Optional[str]:
-        """حفظ نص رسالة كملف"""
-        try:
-            folder = os.path.join(
-                config.DOWNLOAD_PATH,
-                "text",
-                str(owner_id),
-                str(abs(chat_id))
-            )
-            os.makedirs(folder, exist_ok=True)
-
-            file_name = f"msg_{message_id}.txt"
-            file_path = os.path.join(folder, file_name)
-
-            content = (
-                f"تاريخ: {date}\n"
-                f"{'─' * 40}\n"
-                f"{text}\n"
-            )
-
-            async with aiofiles.open(
-                file_path, "w", encoding="utf-8"
-            ) as f:
-                await f.write(content)
-
-            return file_path
-
-        except Exception as e:
-            error_logger.log_exception(
-                e, "save_text_as_file", owner_id
-            )
-            return None
-
-    # ==================== حفظ الميديا ====================
-
-    async def save_media(
-            self,
-            owner_id: int,
-            chat_id: int,
-            file_data: bytes,
-            file_name: str,
-            media_type: str) -> Optional[str]:
-        """حفظ ملف ميديا"""
-        try:
-            size_mb = len(file_data) / (1024 * 1024)
-            if size_mb > config.MAX_DOWNLOAD_SIZE:
-                bot_logger.warning(
-                    f"⚠️ الملف كبير جداً: {size_mb:.1f}MB"
-                )
-                return None
-
-            folder = os.path.join(
-                config.DOWNLOAD_PATH,
-                media_type,
-                str(owner_id),
-                str(abs(chat_id))
-            )
-            os.makedirs(folder, exist_ok=True)
-
-            safe_name = safe_filename(file_name)
-            file_path = os.path.join(folder, safe_name)
-
-            if os.path.exists(file_path):
-                return file_path
-
-            async with aiofiles.open(
-                file_path, "wb"
-            ) as f:
-                await f.write(file_data)
-
-            return file_path
-
-        except Exception as e:
-            error_logger.log_exception(
-                e, "save_media", owner_id
-            )
-            return None
 
     # ==================== تصدير TXT ====================
 
@@ -121,7 +28,6 @@ class DownloadManager:
             chat_title: str,
             messages: list,
             extract_smart: bool = False) -> Optional[str]:
-        """تصدير الرسائل كملف TXT"""
         try:
             folder = os.path.join(
                 config.DOWNLOAD_PATH,
@@ -130,7 +36,7 @@ class DownloadManager:
             )
             os.makedirs(folder, exist_ok=True)
 
-            timestamp = datetime.now().strftime(
+            timestamp  = datetime.now().strftime(
                 "%Y%m%d_%H%M%S"
             )
             safe_title = safe_filename(chat_title)
@@ -176,9 +82,6 @@ class DownloadManager:
             ) as f:
                 await f.write(content)
 
-            bot_logger.info(
-                f"✅ تم تصدير TXT: {file_name}"
-            )
             return file_path
 
         except Exception as e:
@@ -196,7 +99,6 @@ class DownloadManager:
             chat_title: str,
             messages: list,
             extract_type: str = "all") -> Optional[str]:
-        """استخراج ذكي وتصدير كـ TXT"""
         try:
             folder = os.path.join(
                 config.DOWNLOAD_PATH,
@@ -205,7 +107,7 @@ class DownloadManager:
             )
             os.makedirs(folder, exist_ok=True)
 
-            timestamp = datetime.now().strftime(
+            timestamp  = datetime.now().strftime(
                 "%Y%m%d_%H%M%S"
             )
             safe_title = safe_filename(chat_title)
@@ -215,11 +117,10 @@ class DownloadManager:
             )
             file_path = os.path.join(folder, file_name)
 
-            # تجميع كل البيانات المستخرجة
-            all_cards   = []
-            all_phones  = []
-            all_emails  = []
-            all_urls    = []
+            all_cards  = []
+            all_phones = []
+            all_emails = []
+            all_urls   = []
 
             for msg in messages:
                 text = msg.get("text", "") or ""
@@ -237,7 +138,6 @@ class DownloadManager:
                 if "urls" in extracted:
                     all_urls.extend(extracted["urls"])
 
-            # إزالة التكرار
             all_cards  = list(set(all_cards))
             all_phones = list(set(all_phones))
             all_emails = list(set(all_emails))
@@ -303,9 +203,6 @@ class DownloadManager:
             ) as f:
                 await f.write(content)
 
-            bot_logger.info(
-                f"✅ تم الاستخراج الذكي: {file_name}"
-            )
             return file_path
 
         except Exception as e:
@@ -316,72 +213,13 @@ class DownloadManager:
 
     # ==================== ضغط الملفات ====================
 
-    async def create_zip(
-            self,
-            owner_id: int,
-            archive_id: int,
-            file_paths: List[str],
-            zip_name: str = None) -> Optional[str]:
-        """إنشاء ملف ZIP"""
-        try:
-            if not file_paths:
-                return None
-
-            folder = os.path.join(
-                config.DOWNLOAD_PATH,
-                "exports",
-                str(owner_id)
-            )
-            os.makedirs(folder, exist_ok=True)
-
-            if not zip_name:
-                timestamp = datetime.now().strftime(
-                    "%Y%m%d_%H%M%S"
-                )
-                zip_name = (
-                    f"archive_{archive_id}"
-                    f"_{timestamp}.zip"
-                )
-
-            zip_path = os.path.join(folder, zip_name)
-
-            def create_zip_sync():
-                with zipfile.ZipFile(
-                    zip_path, "w",
-                    zipfile.ZIP_DEFLATED
-                ) as zf:
-                    for file_path in file_paths:
-                        if os.path.exists(file_path):
-                            arcname = os.path.basename(
-                                file_path
-                            )
-                            zf.write(file_path, arcname)
-
-            await asyncio.get_event_loop().run_in_executor(
-                None, create_zip_sync
-            )
-
-            zip_size = os.path.getsize(zip_path)
-            bot_logger.info(
-                f"✅ تم إنشاء ZIP: {zip_name} "
-                f"({format_size(zip_size)})"
-            )
-            return zip_path
-
-        except Exception as e:
-            error_logger.log_exception(
-                e, "create_zip", owner_id
-            )
-            return None
-
     async def create_archive_zip(
             self,
             owner_id: int,
             chat_id: int,
             archive_id: int) -> Optional[str]:
-        """ضغط كل ملفات أرشيف معين"""
         try:
-            all_files  = []
+            all_files   = []
             media_types = [
                 "photos", "videos", "files",
                 "audio", "voice", "text"
@@ -403,9 +241,38 @@ class DownloadManager:
             if not all_files:
                 return None
 
-            return await self.create_zip(
-                owner_id, archive_id, all_files
+            folder = os.path.join(
+                config.DOWNLOAD_PATH,
+                "exports",
+                str(owner_id)
             )
+            os.makedirs(folder, exist_ok=True)
+
+            timestamp = datetime.now().strftime(
+                "%Y%m%d_%H%M%S"
+            )
+            zip_name = (
+                f"archive_{archive_id}_{timestamp}.zip"
+            )
+            zip_path = os.path.join(folder, zip_name)
+
+            def create_zip_sync():
+                with zipfile.ZipFile(
+                    zip_path, "w",
+                    zipfile.ZIP_DEFLATED
+                ) as zf:
+                    for file_path in all_files:
+                        if os.path.exists(file_path):
+                            arcname = os.path.basename(
+                                file_path
+                            )
+                            zf.write(file_path, arcname)
+
+            await asyncio.get_event_loop().run_in_executor(
+                None, create_zip_sync
+            )
+
+            return zip_path
 
         except Exception as e:
             error_logger.log_exception(
@@ -416,24 +283,19 @@ class DownloadManager:
     # ==================== إحصائيات ====================
 
     def get_folder_size(self, folder: str) -> int:
-        """حساب حجم مجلد"""
         total = 0
         if not os.path.exists(folder):
             return 0
         for dirpath, _, filenames in os.walk(folder):
             for filename in filenames:
-                filepath = os.path.join(
-                    dirpath, filename
-                )
+                filepath = os.path.join(dirpath, filename)
                 try:
                     total += os.path.getsize(filepath)
                 except OSError:
                     pass
         return total
 
-    def get_user_storage(
-            self, owner_id: int) -> dict:
-        """إحصائيات تخزين مستخدم"""
+    def get_user_storage(self, owner_id: int) -> dict:
         stats = {}
         total = 0
 
@@ -465,7 +327,6 @@ class DownloadManager:
         return stats
 
     def _count_files(self, folder: str) -> int:
-        """عد الملفات في مجلد"""
         if not os.path.exists(folder):
             return 0
         count = 0
@@ -473,19 +334,11 @@ class DownloadManager:
             count += len(files)
         return count
 
-    def file_exists(self, file_path: str) -> bool:
-        return os.path.exists(file_path)
-
     def get_file_size(self, file_path: str) -> int:
         try:
             return os.path.getsize(file_path)
         except OSError:
             return 0
-
-    def is_size_allowed(
-            self, size_bytes: int) -> bool:
-        size_mb = size_bytes / (1024 * 1024)
-        return size_mb <= config.MAX_DOWNLOAD_SIZE
 
     # ==================== تنظيف ====================
 
@@ -493,7 +346,6 @@ class DownloadManager:
             self,
             owner_id: int,
             days: int = 30) -> dict:
-        """حذف الملفات القديمة"""
         deleted_count = 0
         deleted_size  = 0
         cutoff = datetime.now() - timedelta(days=days)
@@ -541,7 +393,6 @@ class DownloadManager:
             self,
             owner_id: int,
             chat_id: int) -> bool:
-        """حذف كل ملفات أرشيف معين"""
         try:
             media_types = [
                 "photos", "videos", "files",
@@ -571,7 +422,6 @@ class DownloadManager:
             owner_id: int,
             chat_id: int,
             media_type: str = None) -> List[str]:
-        """جلب كل مسارات الملفات"""
         files = []
         media_types = (
             [media_type] if media_type
