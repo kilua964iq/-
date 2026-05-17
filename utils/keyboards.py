@@ -102,15 +102,15 @@ def chats_keyboard(chats: list,
                    per_page: int = 8) -> InlineKeyboardMarkup:
     keyboard = []
 
-    start = page * per_page
-    end   = start + per_page
+    start   = page * per_page
+    end     = start + per_page
     current = chats[start:end]
 
     for i, chat in enumerate(current):
         real_index = start + i
-        icon = "📢" if chat_type == "channel" else "👥"
-        name = chat.get("title", "بدون اسم")
-        members = chat.get("members_count", 0)
+        icon       = "📢" if chat_type == "channel" else "👥"
+        name       = chat.get("title", "بدون اسم")
+        members    = chat.get("members_count", 0)
 
         keyboard.append([btn(
             f"{icon} {name} ({_fmt(members)})",
@@ -119,11 +119,15 @@ def chats_keyboard(chats: list,
 
     nav = []
     if page > 0:
-        nav.append(btn("⬅️ السابق",
-                       f"page_{chat_type}_{page-1}"))
+        nav.append(btn(
+            "⬅️ السابق",
+            f"page_{chat_type}_{page-1}"
+        ))
     if end < len(chats):
-        nav.append(btn("التالي ➡️",
-                       f"page_{chat_type}_{page+1}"))
+        nav.append(btn(
+            "التالي ➡️",
+            f"page_{chat_type}_{page+1}"
+        ))
     if nav:
         keyboard.append(nav)
 
@@ -231,7 +235,8 @@ def confirm_fetch_keyboard() -> InlineKeyboardMarkup:
 
 # ==================== الأرشيف ====================
 
-def archive_keyboard(archive_id: int) -> InlineKeyboardMarkup:
+def archive_keyboard(
+        archive_id: int) -> InlineKeyboardMarkup:
     return kb(
         [
             btn("📝 النصوص",   f"arch_text_{archive_id}"),
@@ -250,20 +255,23 @@ def archive_keyboard(archive_id: int) -> InlineKeyboardMarkup:
             btn("📦 تصدير ZIP", f"arch_zip_{archive_id}"),
         ],
         [
-            btn("💡 استخراج ذكي", f"arch_extract_{archive_id}"),
-            btn("🗑️ حذف",          f"arch_delete_{archive_id}"),
+            btn("💡 استخراج ذكي",
+                f"arch_extract_{archive_id}"),
+            btn("🗑️ حذف",
+                f"arch_delete_{archive_id}"),
         ],
         [btn("🔙 رجوع", "show_archives")],
     )
 
 
-def archives_list_keyboard(archives: list,
-                           page: int = 0,
-                           per_page: int = 5) -> InlineKeyboardMarkup:
+def archives_list_keyboard(
+        archives: list,
+        page: int = 0,
+        per_page: int = 5) -> InlineKeyboardMarkup:
     keyboard = []
 
-    start = page * per_page
-    end   = start + per_page
+    start   = page * per_page
+    end     = start + per_page
     current = archives[start:end]
 
     for archive in current:
@@ -284,11 +292,15 @@ def archives_list_keyboard(archives: list,
 
     nav = []
     if page > 0:
-        nav.append(btn("⬅️ السابق",
-                       f"archives_page_{page-1}"))
+        nav.append(btn(
+            "⬅️ السابق",
+            f"archives_page_{page-1}"
+        ))
     if end < len(archives):
-        nav.append(btn("التالي ➡️",
-                       f"archives_page_{page+1}"))
+        nav.append(btn(
+            "التالي ➡️",
+            f"archives_page_{page+1}"
+        ))
     if nav:
         keyboard.append(nav)
 
@@ -300,16 +312,9 @@ def archives_list_keyboard(archives: list,
 
 def search_keyboard() -> InlineKeyboardMarkup:
     return kb(
-        [
-            btn("🔤 بحث بالنص",    "search_text"),
-            btn("📅 بحث بالتاريخ", "search_date"),
-        ],
-        [
-            btn("🖼️ بحث بالنوع",  "search_type"),
-            btn("📢 بحث بالقناة", "search_chat"),
-        ],
-        [btn("🌐 بحث في الكل", "search_all")],
-        [btn("🔙 رجوع", "main_menu")],
+        [btn("🔤 بحث بالنص",    "search_text")],
+        [btn("🌐 بحث في الكل",  "search_all")],
+        [btn("🔙 رجوع",          "main_menu")],
     )
 
 
@@ -413,7 +418,8 @@ def owner_panel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def admins_list_keyboard(admins: list) -> InlineKeyboardMarkup:
+def admins_list_keyboard(
+        admins: list) -> InlineKeyboardMarkup:
     keyboard = []
 
     for admin in admins:
@@ -426,12 +432,17 @@ def admins_list_keyboard(admins: list) -> InlineKeyboardMarkup:
             f"owner_admin_{admin.get('telegram_id')}"
         )])
 
-    keyboard.append([btn("➕ إضافة أدمن", "owner_add_admin")])
-    keyboard.append([btn("🔙 رجوع", "owner_panel")])
+    keyboard.append([
+        btn("➕ إضافة أدمن", "owner_add_admin")
+    ])
+    keyboard.append([
+        btn("🔙 رجوع", "owner_panel")
+    ])
     return InlineKeyboardMarkup(keyboard)
 
 
-def admin_manage_keyboard(admin_id: int) -> InlineKeyboardMarkup:
+def admin_manage_keyboard(
+        admin_id: int) -> InlineKeyboardMarkup:
     return kb(
         [
             btn("✏️ تعديل الصلاحيات",
@@ -443,8 +454,9 @@ def admin_manage_keyboard(admin_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def admin_user_keyboard(user_id: int,
-                        is_banned: bool = False) -> InlineKeyboardMarkup:
+def admin_user_keyboard(
+        user_id: int,
+        is_banned: bool = False) -> InlineKeyboardMarkup:
     ban_btn = (
         btn("✅ رفع الحظر", f"admin_unban_{user_id}")
         if is_banned else
