@@ -5,12 +5,9 @@ sys.stdout.reconfigure(line_buffering=True)
 print("=== بدء تشغيل البوت ===", flush=True)
 
 import asyncio
-import threading
-import nest_asyncio
+import concurrent.futures
 import telebot
 from config import config
-
-nest_asyncio.apply()
 
 print("✅ تم استيراد المكتبات", flush=True)
 
@@ -20,7 +17,7 @@ print("✅ تم استيراد المكتبات", flush=True)
 bot = telebot.TeleBot(
     config.BOT_TOKEN,
     parse_mode=None,
-    threaded=True,
+    threaded=False,
 )
 
 print("✅ تم إنشاء البوت", flush=True)
@@ -56,6 +53,21 @@ def register_handlers():
 
 # ==================== تشغيل async ====================
 
+def run_async_safe(coro):
+    """تشغيل coroutine بشكل آمن"""
+    def run_in_thread():
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        try:
+            return new_loop.run_until_complete(coro)
+        finally:
+            new_loop.close()
+
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        future = pool.submit(run_in_thread)
+        return future.result(timeout=60)
+
+
 async def startup():
     print("⏳ جاري تشغيل الخدمات...", flush=True)
 
@@ -79,7 +91,10 @@ async def startup():
         )
         print("✅ تم إشعار المالك", flush=True)
     except Exception as e:
-        print(f"⚠️ لم يتم إشعار المالك: {e}", flush=True)
+        print(
+            f"⚠️ لم يتم إشعار المالك: {e}",
+            flush=True
+        )
 
     print("🚀 البوت يعمل بنجاح!", flush=True)
 
@@ -90,18 +105,21 @@ async def shutdown():
     try:
         from services.queue_service import queue_service
         await queue_service.stop()
+        print("✅ تم إيقاف الطابور", flush=True)
     except Exception:
         pass
 
     try:
         from database import db
         await db.disconnect()
+        print("✅ تم قطع قاعدة البيانات", flush=True)
     except Exception:
         pass
 
     try:
         from services.telegram_client import telegram_service
         await telegram_service.manager.disconnect_all()
+        print("✅ تم قطع اتصالات Telethon", flush=True)
     except Exception:
         pass
 
@@ -150,9 +168,7 @@ def main():
     register_handlers()
 
     # تشغيل الخدمات
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(startup())
+    run_async_safe(startup())
 
     print("✅ البوت جاهز للتشغيل", flush=True)
 
@@ -168,8 +184,7 @@ def main():
     except Exception as e:
         print(f"❌ خطأ: {e}", flush=True)
     finally:
-        loop.run_until_complete(shutdown())
-        loop.close()
+        run_async_safe(shutdown())
 
 
 if __name__ == "__main__":
