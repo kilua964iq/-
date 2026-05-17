@@ -904,10 +904,6 @@ def register_admin_handlers(bot: telebot.TeleBot):
             owner_id=user_id,
             query=query,
         )
-
-        ## تكملة `handlers/admin.py`
-
-```python
         try:
             bot.delete_message(
                 user_id, wait_msg.message_id
