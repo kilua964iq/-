@@ -17,10 +17,35 @@ print("✅ تم استيراد المكتبات", flush=True)
 bot = telebot.TeleBot(
     config.BOT_TOKEN,
     parse_mode=None,
-    threaded=False,
+    threaded=True,
 )
 
 print("✅ تم إنشاء البوت", flush=True)
+
+
+# ==================== تشغيل async ====================
+
+def run_async_safe(coro):
+    """تشغيل coroutine بشكل آمن"""
+    def run_in_thread():
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        try:
+            return new_loop.run_until_complete(coro)
+        finally:
+            new_loop.close()
+
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1
+    )
+    future = executor.submit(run_in_thread)
+    try:
+        return future.result(timeout=60)
+    except Exception as e:
+        print(f"❌ خطأ: {e}", flush=True)
+        return None
+    finally:
+        executor.shutdown(wait=False)
 
 
 # ==================== تسجيل الهاندلرز ====================
@@ -51,22 +76,7 @@ def register_handlers():
     print("✅ تم تسجيل كل الهاندلرز", flush=True)
 
 
-# ==================== تشغيل async ====================
-
-def run_async_safe(coro):
-    """تشغيل coroutine بشكل آمن"""
-    def run_in_thread():
-        new_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(new_loop)
-        try:
-            return new_loop.run_until_complete(coro)
-        finally:
-            new_loop.close()
-
-    with concurrent.futures.ThreadPoolExecutor() as pool:
-        future = pool.submit(run_in_thread)
-        return future.result(timeout=60)
-
+# ==================== startup ====================
 
 async def startup():
     print("⏳ جاري تشغيل الخدمات...", flush=True)
@@ -81,54 +91,25 @@ async def startup():
     )
     print("✅ نظام الطابور", flush=True)
 
-    try:
-        bot.send_message(
-            config.OWNER_ID,
-            f"🚀 **تم تشغيل البوت بنجاح!**\n\n"
-            f"👑 المطور: {config.DEVELOPER_NAME}\n"
-            f"📱 {config.DEVELOPER_USERNAME}",
-            parse_mode="Markdown"
-        )
-        print("✅ تم إشعار المالك", flush=True)
-    except Exception as e:
-        print(
-            f"⚠️ لم يتم إشعار المالك: {e}",
-            flush=True
-        )
-
     print("🚀 البوت يعمل بنجاح!", flush=True)
 
 
 async def shutdown():
-    print("⏳ جاري إيقاف الخدمات...", flush=True)
-
     try:
         from services.queue_service import queue_service
         await queue_service.stop()
-        print("✅ تم إيقاف الطابور", flush=True)
     except Exception:
         pass
 
     try:
         from database import db
         await db.disconnect()
-        print("✅ تم قطع قاعدة البيانات", flush=True)
     except Exception:
         pass
 
     try:
         from services.telegram_client import telegram_service
         await telegram_service.manager.disconnect_all()
-        print("✅ تم قطع اتصالات Telethon", flush=True)
-    except Exception:
-        pass
-
-    try:
-        bot.send_message(
-            config.OWNER_ID,
-            "⛔ **تم إيقاف البوت**",
-            parse_mode="Markdown"
-        )
     except Exception:
         pass
 
@@ -165,10 +146,24 @@ def main():
     print("🚀 جاري تشغيل البوت...", flush=True)
 
     check_env_vars()
+
+    # تشغيل الخدمات أولاً
+    run_async_safe(startup())
+
+    # تسجيل الهاندلرز
     register_handlers()
 
-    # تشغيل الخدمات
-    run_async_safe(startup())
+    # إشعار المالك
+    try:
+        bot.send_message(
+            config.OWNER_ID,
+            f"🚀 **تم تشغيل البوت بنجاح!**\n\n"
+            f"👑 المطور: {config.DEVELOPER_NAME}\n"
+            f"📱 {config.DEVELOPER_USERNAME}",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        print(f"⚠️ {e}", flush=True)
 
     print("✅ البوت جاهز للتشغيل", flush=True)
 
@@ -178,6 +173,11 @@ def main():
             timeout=10,
             long_polling_timeout=5,
             logger_level=None,
+            skip_pending=True,
+            allowed_updates=[
+                "message",
+                "callback_query",
+            ],
         )
     except KeyboardInterrupt:
         print("⛔ تم إيقاف البوت", flush=True)
