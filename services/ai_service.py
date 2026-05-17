@@ -16,26 +16,19 @@ class AIService:
         self.client = AsyncOpenAI(
             api_key=config.OPENAI_API_KEY
         )
-        self.model = "gpt-4-turbo-preview"
+        self.model         = "gpt-4-turbo-preview"
         self.whisper_model = "whisper-1"
 
-    # ==================== تلخيص المحتوى ====================
+    # ==================== تلخيص ====================
 
     async def summarize_text(
             self,
             text: str,
-            language: str = "ar",
             max_length: int = 200) -> Optional[str]:
         """تلخيص نص"""
         try:
             if not text or len(text) < 50:
                 return text
-
-            prompt = (
-                f"لخص النص التالي بشكل مختصر وواضح "
-                f"بحد أقصى {max_length} كلمة باللغة العربية:\n\n"
-                f"{text}"
-            )
 
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -43,13 +36,17 @@ class AIService:
                     {
                         "role": "system",
                         "content": (
-                            "أنت مساعد متخصص في تلخيص النصوص "
-                            "بشكل دقيق ومختصر."
+                            "أنت مساعد متخصص في تلخيص "
+                            "النصوص بشكل دقيق ومختصر."
                         )
                     },
                     {
                         "role": "user",
-                        "content": prompt
+                        "content": (
+                            f"لخص النص التالي بحد أقصى "
+                            f"{max_length} كلمة "
+                            f"باللغة العربية:\n\n{text}"
+                        )
                     }
                 ],
                 max_tokens=500,
@@ -57,11 +54,13 @@ class AIService:
             )
 
             summary = response.choices[0].message.content
-            bot_logger.debug(f"✅ تم تلخيص نص بنجاح")
+            bot_logger.debug("✅ تم تلخيص نص")
             return summary
 
         except Exception as e:
-            error_logger.log_exception(e, "summarize_text")
+            error_logger.log_exception(
+                e, "summarize_text"
+            )
             return None
 
     async def summarize_batch(
@@ -77,12 +76,11 @@ class AIService:
             if progress_callback:
                 await progress_callback(i + 1, len(texts))
 
-            # تجنب تجاوز حد الطلبات
             await asyncio.sleep(0.5)
 
         return results
 
-    # ==================== تصنيف المحتوى ====================
+    # ==================== تصنيف ====================
 
     async def categorize_text(
             self,
@@ -90,23 +88,17 @@ class AIService:
         """تصنيف نص تلقائياً"""
         try:
             if not text or len(text) < 10:
-                return {"category": "عام", "confidence": 0.5}
+                return {
+                    "category":   "عام",
+                    "confidence": 0.5
+                }
 
             categories = [
-                "أخبار", "تقنية", "رياضة", "ترفيه",
-                "سياسة", "اقتصاد", "صحة", "علوم",
-                "ثقافة", "دين", "إعلانات", "عام"
+                "أخبار", "تقنية", "رياضة",
+                "ترفيه", "سياسة", "اقتصاد",
+                "صحة", "علوم", "ثقافة",
+                "دين", "إعلانات", "عام"
             ]
-
-            prompt = (
-                f"صنف النص التالي في إحدى الفئات: "
-                f"{', '.join(categories)}\n\n"
-                f"النص: {text[:500]}\n\n"
-                f"أجب بصيغة JSON فقط:\n"
-                f'{{"category": "الفئة", '
-                f'"confidence": 0.0-1.0, '
-                f'"keywords": ["كلمة1", "كلمة2"]}}'
-            )
 
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -115,12 +107,20 @@ class AIService:
                         "role": "system",
                         "content": (
                             "أنت مصنف نصوص متخصص. "
-                            "أجب بـ JSON فقط بدون أي نص إضافي."
+                            "أجب بـ JSON فقط."
                         )
                     },
                     {
                         "role": "user",
-                        "content": prompt
+                        "content": (
+                            f"صنف النص في إحدى الفئات: "
+                            f"{', '.join(categories)}\n\n"
+                            f"النص: {text[:500]}\n\n"
+                            f"أجب بـ JSON:\n"
+                            f'{{"category": "الفئة", '
+                            f'"confidence": 0.0-1.0, '
+                            f'"keywords": []}}'
+                        )
                     }
                 ],
                 max_tokens=150,
@@ -131,33 +131,15 @@ class AIService:
             result = json.loads(
                 response.choices[0].message.content
             )
-            bot_logger.debug(
-                f"✅ تم تصنيف النص: {result.get('category')}"
-            )
             return result
 
         except Exception as e:
-            error_logger.log_exception(e, "categorize_text")
+            error_logger.log_exception(
+                e, "categorize_text"
+            )
             return {"category": "عام", "confidence": 0.0}
 
-    async def categorize_batch(
-            self,
-            texts: List[str],
-            progress_callback=None) -> List[Optional[dict]]:
-        """تصنيف مجموعة نصوص"""
-        results = []
-        for i, text in enumerate(texts):
-            category = await self.categorize_text(text)
-            results.append(category)
-
-            if progress_callback:
-                await progress_callback(i + 1, len(texts))
-
-            await asyncio.sleep(0.5)
-
-        return results
-
-    # ==================== تحويل الصوت لنص ====================
+    # ==================== تحويل صوت ====================
 
     async def transcribe_audio(
             self,
@@ -177,7 +159,7 @@ class AIService:
                 )
 
             bot_logger.debug(
-                f"✅ تم تحويل الصوت لنص: {file_path}"
+                f"✅ تم تحويل الصوت: {file_path}"
             )
             return response
 
@@ -201,13 +183,15 @@ class AIService:
             results.append(text)
 
             if progress_callback:
-                await progress_callback(i + 1, len(file_paths))
+                await progress_callback(
+                    i + 1, len(file_paths)
+                )
 
             await asyncio.sleep(0.3)
 
         return results
 
-    # ==================== تحليل الصور ====================
+    # ==================== تحليل صور ====================
 
     async def analyze_image(
             self,
@@ -225,10 +209,10 @@ class AIService:
 
             ext = os.path.splitext(image_path)[1].lower()
             mime_map = {
-                ".jpg": "image/jpeg",
+                ".jpg":  "image/jpeg",
                 ".jpeg": "image/jpeg",
-                ".png": "image/png",
-                ".gif": "image/gif",
+                ".png":  "image/png",
+                ".gif":  "image/gif",
                 ".webp": "image/webp",
             }
             mime_type = mime_map.get(ext, "image/jpeg")
@@ -242,13 +226,13 @@ class AIService:
                             {
                                 "type": "text",
                                 "text": (
-                                    "حلل هذه الصورة وأخبرني:\n"
+                                    "حلل هذه الصورة:\n"
                                     "1. ماذا تحتوي؟\n"
-                                    "2. ما الفئة؟\n"
+                                    "2. الفئة؟\n"
                                     "3. كلمات مفتاحية\n\n"
                                     "أجب بـ JSON:\n"
-                                    '{"description": "", '
-                                    '"category": "", '
+                                    '{"description": "",'
+                                    '"category": "",'
                                     '"keywords": []}'
                                 )
                             },
@@ -271,16 +255,17 @@ class AIService:
             result = json.loads(
                 response.choices[0].message.content
             )
-            bot_logger.debug(f"✅ تم تحليل الصورة")
             return result
 
         except Exception as e:
-            error_logger.log_exception(e, "analyze_image")
+            error_logger.log_exception(
+                e, "analyze_image"
+            )
             return None
 
     # ==================== كشف التكرار ====================
 
-    async def get_text_embedding(
+    async def get_embedding(
             self,
             text: str) -> Optional[List[float]]:
         """استخراج embedding للنص"""
@@ -296,31 +281,27 @@ class AIService:
 
         except Exception as e:
             error_logger.log_exception(
-                e, "get_text_embedding"
+                e, "get_embedding"
             )
             return None
 
     def calculate_similarity(
             self,
-            embedding1: List[float],
-            embedding2: List[float]) -> float:
+            emb1: List[float],
+            emb2: List[float]) -> float:
         """حساب التشابه بين نصين"""
         try:
             import math
-            dot_product = sum(
-                a * b for a, b in zip(embedding1, embedding2)
+            dot = sum(
+                a * b for a, b in zip(emb1, emb2)
             )
-            magnitude1 = math.sqrt(
-                sum(a ** 2 for a in embedding1)
-            )
-            magnitude2 = math.sqrt(
-                sum(b ** 2 for b in embedding2)
-            )
+            mag1 = math.sqrt(sum(a**2 for a in emb1))
+            mag2 = math.sqrt(sum(b**2 for b in emb2))
 
-            if magnitude1 == 0 or magnitude2 == 0:
+            if mag1 == 0 or mag2 == 0:
                 return 0.0
 
-            return dot_product / (magnitude1 * magnitude2)
+            return dot / (mag1 * mag2)
 
         except Exception:
             return 0.0
@@ -330,22 +311,26 @@ class AIService:
             text1: str,
             text2: str,
             threshold: float = 0.95) -> bool:
-        """كشف إذا كان النصان متكررين"""
+        """كشف التكرار"""
         try:
             if text1 == text2:
                 return True
 
-            emb1 = await self.get_text_embedding(text1)
-            emb2 = await self.get_text_embedding(text2)
+            emb1 = await self.get_embedding(text1)
+            emb2 = await self.get_embedding(text2)
 
             if not emb1 or not emb2:
                 return False
 
-            similarity = self.calculate_similarity(emb1, emb2)
+            similarity = self.calculate_similarity(
+                emb1, emb2
+            )
             return similarity >= threshold
 
         except Exception as e:
-            error_logger.log_exception(e, "is_duplicate")
+            error_logger.log_exception(
+                e, "is_duplicate"
+            )
             return False
 
     # ==================== تحليل شامل ====================
@@ -357,44 +342,39 @@ class AIService:
             include_category: bool = True) -> dict:
         """تحليل شامل للمحتوى"""
         result = {
-            "summary": None,
+            "summary":  None,
             "category": None,
             "keywords": [],
-            "sentiment": None,
         }
 
-        tasks = []
-
         if include_summary and text:
-            tasks.append(
-                ("summary", self.summarize_text(text))
-            )
-
-        if include_category and text:
-            tasks.append(
-                ("category", self.categorize_text(text))
-            )
-
-        for key, task in tasks:
             try:
-                value = await task
-                if key == "category" and value:
-                    result["category"] = value.get(
-                        "category"
-                    )
-                    result["keywords"] = value.get(
-                        "keywords", []
-                    )
-                else:
-                    result[key] = value
+                result["summary"] = (
+                    await self.summarize_text(text)
+                )
             except Exception as e:
                 error_logger.log_exception(
-                    e, f"analyze_content_{key}"
+                    e, "analyze_content_summary"
+                )
+
+        if include_category and text:
+            try:
+                cat = await self.categorize_text(text)
+                if cat:
+                    result["category"] = cat.get(
+                        "category"
+                    )
+                    result["keywords"] = cat.get(
+                        "keywords", []
+                    )
+            except Exception as e:
+                error_logger.log_exception(
+                    e, "analyze_content_category"
                 )
 
         return result
 
-    # ==================== توليد تقرير ====================
+    # ==================== تقرير ====================
 
     async def generate_report(
             self,
@@ -402,16 +382,6 @@ class AIService:
             chat_name: str) -> Optional[str]:
         """توليد تقرير تحليلي"""
         try:
-            prompt = (
-                f"بناءً على هذه الإحصائيات لقناة '{chat_name}':\n"
-                f"{json.dumps(stats, ensure_ascii=False, indent=2)}\n\n"
-                f"اكتب تقريراً تحليلياً مختصراً باللغة العربية "
-                f"يشمل:\n"
-                f"1. ملخص النشاط\n"
-                f"2. أبرز الملاحظات\n"
-                f"3. توصيات\n"
-            )
-
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -419,23 +389,27 @@ class AIService:
                         "role": "system",
                         "content": (
                             "أنت محلل بيانات متخصص "
-                            "في تحليل محتوى وسائل التواصل."
+                            "في تحليل محتوى تيليغرام."
                         )
                     },
                     {
                         "role": "user",
-                        "content": prompt
+                        "content": (
+                            f"بناءً على إحصائيات "
+                            f"قناة '{chat_name}':\n"
+                            f"{json.dumps(stats, ensure_ascii=False, indent=2)}\n\n"
+                            f"اكتب تقريراً مختصراً يشمل:\n"
+                            f"1. ملخص النشاط\n"
+                            f"2. أبرز الملاحظات\n"
+                            f"3. توصيات\n"
+                        )
                     }
                 ],
                 max_tokens=800,
                 temperature=0.5,
             )
 
-            report = response.choices[0].message.content
-            bot_logger.info(
-                f"✅ تم توليد تقرير لـ {chat_name}"
-            )
-            return report
+            return response.choices[0].message.content
 
         except Exception as e:
             error_logger.log_exception(
@@ -443,7 +417,7 @@ class AIService:
             )
             return None
 
-    # ==================== التحقق من الخدمة ====================
+    # ==================== فحص الخدمة ====================
 
     async def check_service(self) -> bool:
         """التحقق من عمل الخدمة"""
@@ -451,14 +425,13 @@ class AIService:
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {
-                        "role": "user",
-                        "content": "قل نعم فقط"
-                    }
+                    {"role": "user", "content": "قل نعم"}
                 ],
                 max_tokens=5,
             )
-            return bool(response.choices[0].message.content)
+            return bool(
+                response.choices[0].message.content
+            )
         except Exception:
             return False
 
