@@ -6,8 +6,11 @@ print("=== بدء تشغيل البوت ===", flush=True)
 
 import asyncio
 import threading
+import nest_asyncio
 import telebot
 from config import config
+
+nest_asyncio.apply()
 
 print("✅ تم استيراد المكتبات", flush=True)
 
@@ -17,7 +20,7 @@ print("✅ تم استيراد المكتبات", flush=True)
 bot = telebot.TeleBot(
     config.BOT_TOKEN,
     parse_mode=None,
-    threaded=False,
+    threaded=True,
 )
 
 print("✅ تم إنشاء البوت", flush=True)
@@ -26,7 +29,6 @@ print("✅ تم إنشاء البوت", flush=True)
 # ==================== تسجيل الهاندلرز ====================
 
 def register_handlers():
-    """تسجيل كل الهاندلرز"""
     print("⏳ جاري تسجيل الهاندلرز...", flush=True)
 
     from handlers.auth import register_auth_handlers
@@ -55,30 +57,22 @@ def register_handlers():
 # ==================== تشغيل async ====================
 
 async def startup():
-    """تشغيل الخدمات الأساسية"""
     print("⏳ جاري تشغيل الخدمات...", flush=True)
 
-    # الاتصال بقاعدة البيانات
     from database import db
     await db.connect()
     print("✅ قاعدة البيانات", flush=True)
 
-    # تشغيل الطابور
     from services.queue_service import queue_service
     await queue_service.start(
         num_workers=config.MAX_CONCURRENT_TASKS
     )
     print("✅ نظام الطابور", flush=True)
 
-    # إشعار المالك
     try:
         bot.send_message(
             config.OWNER_ID,
             f"🚀 **تم تشغيل البوت بنجاح!**\n\n"
-            f"⚙️ الإصدار: `2.0.0`\n"
-            f"👷 العمال: `{config.MAX_CONCURRENT_TASKS}`\n"
-            f"📅 التاريخ: "
-            f"`{__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`\n\n"
             f"👑 المطور: {config.DEVELOPER_NAME}\n"
             f"📱 {config.DEVELOPER_USERNAME}",
             parse_mode="Markdown"
@@ -91,27 +85,23 @@ async def startup():
 
 
 async def shutdown():
-    """إيقاف الخدمات"""
     print("⏳ جاري إيقاف الخدمات...", flush=True)
 
     try:
         from services.queue_service import queue_service
         await queue_service.stop()
-        print("✅ تم إيقاف الطابور", flush=True)
     except Exception:
         pass
 
     try:
         from database import db
         await db.disconnect()
-        print("✅ تم قطع الاتصال بقاعدة البيانات", flush=True)
     except Exception:
         pass
 
     try:
         from services.telegram_client import telegram_service
         await telegram_service.manager.disconnect_all()
-        print("✅ تم قطع اتصالات Telethon", flush=True)
     except Exception:
         pass
 
@@ -125,19 +115,9 @@ async def shutdown():
         pass
 
 
-# ==================== تشغيل الـ async في thread ====================
-
-def run_async_startup():
-    """تشغيل startup في thread منفصل"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(startup())
-
-
 # ==================== التحقق من المتغيرات ====================
 
 def check_env_vars():
-    """التحقق من المتغيرات المطلوبة"""
     required = [
         "API_ID",
         "API_HASH",
@@ -164,41 +144,32 @@ def check_env_vars():
 # ==================== نقطة التشغيل ====================
 
 def main():
-    """تشغيل البوت"""
     print("🚀 جاري تشغيل البوت...", flush=True)
 
-    # التحقق من المتغيرات
     check_env_vars()
-
-    # تسجيل الهاندلرز
     register_handlers()
 
-    # تشغيل الخدمات الأساسية
-    startup_thread = threading.Thread(
-        target=run_async_startup,
-        daemon=True
-    )
-    startup_thread.start()
-    startup_thread.join(timeout=30)
+    # تشغيل الخدمات
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(startup())
 
     print("✅ البوت جاهز للتشغيل", flush=True)
 
-    # تشغيل البوت
     try:
         print("🤖 البوت يستمع للرسائل...", flush=True)
         bot.infinity_polling(
             timeout=10,
             long_polling_timeout=5,
             logger_level=None,
-            allowed_updates=None,
         )
     except KeyboardInterrupt:
         print("⛔ تم إيقاف البوت", flush=True)
     except Exception as e:
         print(f"❌ خطأ: {e}", flush=True)
     finally:
-        loop = asyncio.new_event_loop()
         loop.run_until_complete(shutdown())
+        loop.close()
 
 
 if __name__ == "__main__":
