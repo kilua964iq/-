@@ -1,5 +1,4 @@
 import asyncpg
-import asyncio
 from datetime import datetime
 from config import config
 import json
@@ -30,10 +29,8 @@ class Database:
                 command_timeout=60
             )
             await self.create_tables()
-            logger.info("✅ تم الاتصال بقاعدة البيانات")
             print("✅ تم الاتصال بقاعدة البيانات", flush=True)
         except Exception as e:
-            logger.error(f"❌ خطأ في الاتصال: {e}")
             print(f"❌ خطأ في الاتصال: {e}", flush=True)
             raise
 
@@ -182,6 +179,22 @@ class Database:
                     created_at TIMESTAMP DEFAULT NOW()
                 );
 
+                CREATE TABLE IF NOT EXISTS user_settings (
+                    id BIGSERIAL PRIMARY KEY,
+                    telegram_id BIGINT UNIQUE NOT NULL,
+                    smart_filter BOOLEAN DEFAULT TRUE,
+                    extract_cards BOOLEAN DEFAULT TRUE,
+                    extract_phones BOOLEAN DEFAULT TRUE,
+                    extract_emails BOOLEAN DEFAULT TRUE,
+                    extract_urls BOOLEAN DEFAULT TRUE,
+                    clean_text BOOLEAN DEFAULT TRUE,
+                    ai_summary BOOLEAN DEFAULT FALSE,
+                    ai_category BOOLEAN DEFAULT FALSE,
+                    voice_to_text BOOLEAN DEFAULT FALSE,
+                    language VARCHAR(10) DEFAULT 'ar',
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_messages_archive
                     ON messages(archive_id);
                 CREATE INDEX IF NOT EXISTS idx_messages_owner
@@ -265,6 +278,41 @@ class Database:
                 UPDATE users SET is_banned = FALSE
                 WHERE telegram_id = $1
             """, telegram_id)
+
+    # ==================== الإعدادات ====================
+
+    async def get_settings(self, telegram_id: int):
+        async with self.pool.acquire() as conn:
+            settings = await conn.fetchrow("""
+                SELECT * FROM user_settings
+                WHERE telegram_id = $1
+            """, telegram_id)
+            if not settings:
+                await conn.execute("""
+                    INSERT INTO user_settings (telegram_id)
+                    VALUES ($1)
+                    ON CONFLICT DO NOTHING
+                """, telegram_id)
+                settings = await conn.fetchrow("""
+                    SELECT * FROM user_settings
+                    WHERE telegram_id = $1
+                """, telegram_id)
+            return settings
+
+    async def update_settings(
+            self, telegram_id: int, **kwargs):
+        fields = ", ".join(
+            [f"{k} = ${i+2}"
+             for i, k in enumerate(kwargs.keys())]
+        )
+        values = list(kwargs.values())
+        async with self.pool.acquire() as conn:
+            await conn.execute(f"""
+                INSERT INTO user_settings (telegram_id)
+                VALUES ($1)
+                ON CONFLICT (telegram_id) DO UPDATE
+                SET {fields}, updated_at = NOW()
+            """, telegram_id, *values)
 
     # ==================== الأدمنية ====================
 
@@ -490,7 +538,6 @@ class Database:
             ai_category: str = None,
             metadata: dict = None):
 
-        # ===== تنظيف التاريخ =====
         date = clean_datetime(date)
 
         async with self.pool.acquire() as conn:
@@ -553,6 +600,21 @@ class Database:
                 ORDER BY date DESC
                 LIMIT $3
             """, owner_id, f"%{query}%", limit)
+
+    async def search_all_chats(
+            self,
+            owner_id: int,
+            query: str):
+        async with self.pool.acquire() as conn:
+            return await conn.fetch("""
+                SELECT m.*, a.chat_title
+                FROM messages m
+                JOIN archives a ON m.archive_id = a.id
+                WHERE m.owner_id = $1
+                AND m.text ILIKE $2
+                ORDER BY m.date DESC
+                LIMIT 100
+            """, owner_id, f"%{query}%")
 
     async def count_messages(
             self,
