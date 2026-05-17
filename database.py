@@ -1,10 +1,14 @@
-import asyncpg
+import aiosqlite
+import asyncio
+import os
 from datetime import datetime
 from config import config
 import json
 import logging
 
 logger = logging.getLogger(__name__)
+
+DB_PATH = "data/bot.db"
 
 
 def clean_datetime(dt):
@@ -16,18 +20,37 @@ def clean_datetime(dt):
     return dt
 
 
+def dt_to_str(dt):
+    """تحويل datetime لنص"""
+    if dt is None:
+        return None
+    if isinstance(dt, datetime):
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    return str(dt)
+
+
+def str_to_dt(s):
+    """تحويل نص لـ datetime"""
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
 class Database:
     def __init__(self):
-        self.pool = None
+        self._conn = None
+        self._lock = asyncio.Lock()
 
     async def connect(self):
         try:
-            self.pool = await asyncpg.create_pool(
-                config.DATABASE_URL,
-                min_size=5,
-                max_size=20,
-                command_timeout=60
-            )
+            os.makedirs("data", exist_ok=True)
+            self._conn = await aiosqlite.connect(DB_PATH)
+            self._conn.row_factory = aiosqlite.Row
+            await self._conn.execute("PRAGMA journal_mode=WAL")
+            await self._conn.execute("PRAGMA foreign_keys=ON")
             await self.create_tables()
             print("✅ تم الاتصال بقاعدة البيانات", flush=True)
         except Exception as e:
@@ -35,259 +58,284 @@ class Database:
             raise
 
     async def disconnect(self):
-        if self.pool:
-            await self.pool.close()
+        if self._conn:
+            await self._conn.close()
+
+    async def execute(self, sql, params=()):
+        async with self._lock:
+            await self._conn.execute(sql, params)
+            await self._conn.commit()
+
+    async def fetchone(self, sql, params=()):
+        async with self._lock:
+            async with self._conn.execute(sql, params) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return dict(row)
+                return None
+
+    async def fetchall(self, sql, params=()):
+        async with self._lock:
+            async with self._conn.execute(sql, params) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(r) for r in rows]
+
+    async def fetchval(self, sql, params=()):
+        async with self._lock:
+            async with self._conn.execute(sql, params) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return row[0]
+                return None
+
+    async def insert(self, sql, params=()):
+        async with self._lock:
+            async with self._conn.execute(sql, params) as cursor:
+                await self._conn.commit()
+                return cursor.lastrowid
 
     async def create_tables(self):
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id BIGSERIAL PRIMARY KEY,
-                    telegram_id BIGINT UNIQUE NOT NULL,
-                    username VARCHAR(255),
-                    full_name VARCHAR(255),
-                    phone VARCHAR(20),
-                    role VARCHAR(20) DEFAULT 'user',
-                    is_active BOOLEAN DEFAULT TRUE,
-                    is_banned BOOLEAN DEFAULT FALSE,
-                    joined_at TIMESTAMP DEFAULT NOW(),
-                    last_active TIMESTAMP DEFAULT NOW(),
-                    settings JSONB DEFAULT '{}'
-                );
+        tables = [
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER UNIQUE NOT NULL,
+                username TEXT,
+                full_name TEXT,
+                phone TEXT,
+                role TEXT DEFAULT 'user',
+                is_active INTEGER DEFAULT 1,
+                is_banned INTEGER DEFAULT 0,
+                joined_at TEXT DEFAULT (datetime('now')),
+                last_active TEXT DEFAULT (datetime('now')),
+                settings TEXT DEFAULT '{}'
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS admins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER UNIQUE NOT NULL,
+                username TEXT,
+                full_name TEXT,
+                permissions TEXT DEFAULT '{}',
+                added_by INTEGER,
+                added_at TEXT DEFAULT (datetime('now')),
+                is_active INTEGER DEFAULT 1
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER NOT NULL,
+                session_string TEXT,
+                phone TEXT,
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now')),
+                last_used TEXT DEFAULT (datetime('now'))
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS chats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                chat_title TEXT,
+                chat_type TEXT,
+                chat_username TEXT,
+                members_count INTEGER DEFAULT 0,
+                last_fetched TEXT,
+                total_messages INTEGER DEFAULT 0,
+                metadata TEXT DEFAULT '{}',
+                created_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(owner_id, chat_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS archives (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                chat_title TEXT,
+                content_type TEXT,
+                total_messages INTEGER DEFAULT 0,
+                fetched_messages INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'pending',
+                progress INTEGER DEFAULT 0,
+                started_at TEXT DEFAULT (datetime('now')),
+                completed_at TEXT,
+                settings TEXT DEFAULT '{}'
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                archive_id INTEGER NOT NULL,
+                owner_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                message_type TEXT,
+                text TEXT,
+                file_path TEXT,
+                file_size INTEGER DEFAULT 0,
+                file_name TEXT,
+                mime_type TEXT,
+                date TEXT,
+                sender_id INTEGER,
+                sender_name TEXT,
+                views INTEGER DEFAULT 0,
+                forwards INTEGER DEFAULT 0,
+                ai_summary TEXT,
+                ai_category TEXT,
+                metadata TEXT DEFAULT '{}',
+                saved_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(archive_id, message_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL,
+                task_type TEXT,
+                status TEXT DEFAULT 'pending',
+                priority INTEGER DEFAULT 0,
+                progress INTEGER DEFAULT 0,
+                data TEXT DEFAULT '{}',
+                result TEXT DEFAULT '{}',
+                error TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                started_at TEXT,
+                completed_at TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS user_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER UNIQUE NOT NULL,
+                smart_filter INTEGER DEFAULT 1,
+                extract_cards INTEGER DEFAULT 1,
+                extract_phones INTEGER DEFAULT 1,
+                extract_emails INTEGER DEFAULT 1,
+                extract_urls INTEGER DEFAULT 1,
+                save_txt INTEGER DEFAULT 0,
+                ai_summary INTEGER DEFAULT 0,
+                ai_category INTEGER DEFAULT 0,
+                voice_to_text INTEGER DEFAULT 0,
+                language TEXT DEFAULT 'ar',
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                action TEXT,
+                details TEXT DEFAULT '{}',
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+            """,
+            # Indexes
+            "CREATE INDEX IF NOT EXISTS idx_messages_archive ON messages(archive_id)",
+            "CREATE INDEX IF NOT EXISTS idx_messages_owner ON messages(owner_id)",
+            "CREATE INDEX IF NOT EXISTS idx_archives_owner ON archives(owner_id)",
+            "CREATE INDEX IF NOT EXISTS idx_activity_user ON activity_log(user_id)",
+        ]
 
-                CREATE TABLE IF NOT EXISTS admins (
-                    id BIGSERIAL PRIMARY KEY,
-                    telegram_id BIGINT UNIQUE NOT NULL,
-                    username VARCHAR(255),
-                    full_name VARCHAR(255),
-                    permissions JSONB DEFAULT '{}',
-                    added_by BIGINT,
-                    added_at TIMESTAMP DEFAULT NOW(),
-                    is_active BOOLEAN DEFAULT TRUE
-                );
-
-                CREATE TABLE IF NOT EXISTS user_sessions (
-                    id BIGSERIAL PRIMARY KEY,
-                    telegram_id BIGINT NOT NULL,
-                    session_string TEXT,
-                    phone VARCHAR(20),
-                    is_active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    last_used TIMESTAMP DEFAULT NOW()
-                );
-
-                CREATE TABLE IF NOT EXISTS chats (
-                    id BIGSERIAL PRIMARY KEY,
-                    owner_id BIGINT NOT NULL,
-                    chat_id BIGINT NOT NULL,
-                    chat_title VARCHAR(255),
-                    chat_type VARCHAR(20),
-                    chat_username VARCHAR(255),
-                    members_count INTEGER DEFAULT 0,
-                    last_fetched TIMESTAMP,
-                    total_messages INTEGER DEFAULT 0,
-                    metadata JSONB DEFAULT '{}',
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    UNIQUE(owner_id, chat_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS archives (
-                    id BIGSERIAL PRIMARY KEY,
-                    owner_id BIGINT NOT NULL,
-                    chat_id BIGINT NOT NULL,
-                    chat_title VARCHAR(255),
-                    content_type VARCHAR(20),
-                    total_messages INTEGER DEFAULT 0,
-                    fetched_messages INTEGER DEFAULT 0,
-                    status VARCHAR(20) DEFAULT 'pending',
-                    progress INTEGER DEFAULT 0,
-                    started_at TIMESTAMP DEFAULT NOW(),
-                    completed_at TIMESTAMP,
-                    settings JSONB DEFAULT '{}'
-                );
-
-                CREATE TABLE IF NOT EXISTS messages (
-                    id BIGSERIAL PRIMARY KEY,
-                    archive_id BIGINT NOT NULL,
-                    owner_id BIGINT NOT NULL,
-                    chat_id BIGINT NOT NULL,
-                    message_id INTEGER NOT NULL,
-                    message_type VARCHAR(20),
-                    text TEXT,
-                    file_path VARCHAR(500),
-                    file_size BIGINT DEFAULT 0,
-                    file_name VARCHAR(255),
-                    mime_type VARCHAR(100),
-                    date TIMESTAMP,
-                    sender_id BIGINT,
-                    sender_name VARCHAR(255),
-                    views INTEGER DEFAULT 0,
-                    forwards INTEGER DEFAULT 0,
-                    ai_summary TEXT,
-                    ai_category VARCHAR(100),
-                    metadata JSONB DEFAULT '{}',
-                    saved_at TIMESTAMP DEFAULT NOW(),
-                    UNIQUE(archive_id, message_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id BIGSERIAL PRIMARY KEY,
-                    owner_id BIGINT NOT NULL,
-                    task_type VARCHAR(50),
-                    status VARCHAR(20) DEFAULT 'pending',
-                    priority INTEGER DEFAULT 0,
-                    progress INTEGER DEFAULT 0,
-                    data JSONB DEFAULT '{}',
-                    result JSONB DEFAULT '{}',
-                    error TEXT,
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    started_at TIMESTAMP,
-                    completed_at TIMESTAMP
-                );
-
-                CREATE TABLE IF NOT EXISTS user_settings (
-                    id BIGSERIAL PRIMARY KEY,
-                    telegram_id BIGINT UNIQUE NOT NULL,
-                    smart_filter BOOLEAN DEFAULT TRUE,
-                    extract_cards BOOLEAN DEFAULT TRUE,
-                    extract_phones BOOLEAN DEFAULT TRUE,
-                    extract_emails BOOLEAN DEFAULT TRUE,
-                    extract_urls BOOLEAN DEFAULT TRUE,
-                    save_txt BOOLEAN DEFAULT FALSE,
-                    ai_summary BOOLEAN DEFAULT FALSE,
-                    ai_category BOOLEAN DEFAULT FALSE,
-                    voice_to_text BOOLEAN DEFAULT FALSE,
-                    language VARCHAR(10) DEFAULT 'ar',
-                    updated_at TIMESTAMP DEFAULT NOW()
-                );
-
-                CREATE TABLE IF NOT EXISTS activity_log (
-                    id BIGSERIAL PRIMARY KEY,
-                    user_id BIGINT NOT NULL,
-                    action VARCHAR(100),
-                    details JSONB DEFAULT '{}',
-                    created_at TIMESTAMP DEFAULT NOW()
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_messages_archive
-                    ON messages(archive_id);
-                CREATE INDEX IF NOT EXISTS idx_messages_owner
-                    ON messages(owner_id);
-                CREATE INDEX IF NOT EXISTS idx_archives_owner
-                    ON archives(owner_id);
-                CREATE INDEX IF NOT EXISTS idx_activity_user
-                    ON activity_log(user_id);
-            """)
-            print("✅ تم إنشاء الجداول", flush=True)
+        for table in tables:
+            await self._conn.execute(table)
+        await self._conn.commit()
+        print("✅ تم إنشاء الجداول", flush=True)
 
     # ==================== المستخدمين ====================
 
     async def get_user(self, telegram_id: int):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow(
-                "SELECT * FROM users WHERE telegram_id = $1",
-                telegram_id
-            )
+        return await self.fetchone(
+            "SELECT * FROM users WHERE telegram_id = ?",
+            (telegram_id,)
+        )
 
     async def create_user(self, telegram_id: int,
                           username: str = None,
                           full_name: str = None):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow("""
-                INSERT INTO users (telegram_id, username, full_name)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (telegram_id) DO UPDATE
-                SET username = $2, full_name = $3,
-                    last_active = NOW()
-                RETURNING *
-            """, telegram_id, username, full_name)
+        await self.execute("""
+            INSERT INTO users (telegram_id, username, full_name)
+            VALUES (?, ?, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET
+            username = excluded.username,
+            full_name = excluded.full_name,
+            last_active = datetime('now')
+        """, (telegram_id, username, full_name))
+        return await self.get_user(telegram_id)
 
     async def update_user(self, telegram_id: int, **kwargs):
-        fields = ", ".join(
-            [f"{k} = ${i+2}"
-             for i, k in enumerate(kwargs.keys())]
-        )
+        fields = ", ".join([f"{k} = ?" for k in kwargs.keys()])
         values = list(kwargs.values())
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                f"UPDATE users SET {fields} "
-                f"WHERE telegram_id = $1",
-                telegram_id, *values
-            )
+        values.append(telegram_id)
+        await self.execute(
+            f"UPDATE users SET {fields} WHERE telegram_id = ?",
+            values
+        )
 
     async def get_all_users(self, limit: int = 100,
                             offset: int = 0):
-        async with self.pool.acquire() as conn:
-            return await conn.fetch("""
-                SELECT * FROM users
-                ORDER BY joined_at DESC
-                LIMIT $1 OFFSET $2
-            """, limit, offset)
+        return await self.fetchall(
+            "SELECT * FROM users ORDER BY joined_at DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        )
 
     async def count_users(self):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchval(
-                "SELECT COUNT(*) FROM users"
-            )
+        return await self.fetchval(
+            "SELECT COUNT(*) FROM users"
+        )
 
     async def ban_user(self, telegram_id: int):
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                UPDATE users SET is_banned = TRUE
-                WHERE telegram_id = $1
-            """, telegram_id)
+        await self.execute(
+            "UPDATE users SET is_banned = 1 WHERE telegram_id = ?",
+            (telegram_id,)
+        )
 
     async def unban_user(self, telegram_id: int):
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                UPDATE users SET is_banned = FALSE
-                WHERE telegram_id = $1
-            """, telegram_id)
+        await self.execute(
+            "UPDATE users SET is_banned = 0 WHERE telegram_id = ?",
+            (telegram_id,)
+        )
 
     # ==================== الإعدادات ====================
 
     async def get_settings(self, telegram_id: int):
-        async with self.pool.acquire() as conn:
-            settings = await conn.fetchrow("""
-                SELECT * FROM user_settings
-                WHERE telegram_id = $1
-            """, telegram_id)
-            if not settings:
-                await conn.execute("""
-                    INSERT INTO user_settings (telegram_id)
-                    VALUES ($1)
-                    ON CONFLICT DO NOTHING
-                """, telegram_id)
-                settings = await conn.fetchrow("""
-                    SELECT * FROM user_settings
-                    WHERE telegram_id = $1
-                """, telegram_id)
-            return settings
-
-    async def update_settings(self, telegram_id: int,
-                              **kwargs):
-        fields = ", ".join(
-            [f"{k} = ${i+2}"
-             for i, k in enumerate(kwargs.keys())]
+        settings = await self.fetchone(
+            "SELECT * FROM user_settings WHERE telegram_id = ?",
+            (telegram_id,)
         )
+        if not settings:
+            await self.execute(
+                "INSERT OR IGNORE INTO user_settings (telegram_id) VALUES (?)",
+                (telegram_id,)
+            )
+            settings = await self.fetchone(
+                "SELECT * FROM user_settings WHERE telegram_id = ?",
+                (telegram_id,)
+            )
+        return settings
+
+    async def update_settings(self, telegram_id: int, **kwargs):
+        fields = ", ".join([f"{k} = ?" for k in kwargs.keys()])
         values = list(kwargs.values())
-        async with self.pool.acquire() as conn:
-            await conn.execute(f"""
-                INSERT INTO user_settings (telegram_id)
-                VALUES ($1)
-                ON CONFLICT (telegram_id) DO UPDATE
-                SET {fields}, updated_at = NOW()
-            """, telegram_id, *values)
+        values.append(telegram_id)
+        await self.execute(f"""
+            INSERT OR IGNORE INTO user_settings (telegram_id) VALUES (?);
+        """, (telegram_id,))
+        await self.execute(
+            f"UPDATE user_settings SET {fields} WHERE telegram_id = ?",
+            values
+        )
 
     # ==================== الأدمنية ====================
 
     async def get_admin(self, telegram_id: int):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow(
-                "SELECT * FROM admins "
-                "WHERE telegram_id = $1",
-                telegram_id
-            )
+        return await self.fetchone(
+            "SELECT * FROM admins WHERE telegram_id = ?",
+            (telegram_id,)
+        )
 
     async def add_admin(self, telegram_id: int,
                         username: str, full_name: str,
@@ -301,70 +349,56 @@ class Database:
                 "can_delete_archives": False,
                 "can_view_stats":      True,
             }
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow("""
-                INSERT INTO admins
-                (telegram_id, username, full_name,
-                 added_by, permissions)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (telegram_id) DO UPDATE
-                SET is_active = TRUE
-                RETURNING *
-            """, telegram_id, username, full_name,
-                added_by, json.dumps(permissions))
+        await self.execute("""
+            INSERT INTO admins
+            (telegram_id, username, full_name, added_by, permissions)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET is_active = 1
+        """, (telegram_id, username, full_name,
+              added_by, json.dumps(permissions)))
+        return await self.get_admin(telegram_id)
 
     async def remove_admin(self, telegram_id: int):
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                UPDATE admins SET is_active = FALSE
-                WHERE telegram_id = $1
-            """, telegram_id)
+        await self.execute(
+            "UPDATE admins SET is_active = 0 WHERE telegram_id = ?",
+            (telegram_id,)
+        )
 
     async def get_all_admins(self):
-        async with self.pool.acquire() as conn:
-            return await conn.fetch(
-                "SELECT * FROM admins "
-                "WHERE is_active = TRUE"
-            )
+        return await self.fetchall(
+            "SELECT * FROM admins WHERE is_active = 1"
+        )
 
     async def is_admin(self, telegram_id: int) -> bool:
-        async with self.pool.acquire() as conn:
-            result = await conn.fetchval("""
-                SELECT COUNT(*) FROM admins
-                WHERE telegram_id = $1
-                AND is_active = TRUE
-            """, telegram_id)
-            return result > 0
+        result = await self.fetchval(
+            "SELECT COUNT(*) FROM admins WHERE telegram_id = ? AND is_active = 1",
+            (telegram_id,)
+        )
+        return result > 0
 
     # ==================== الجلسات ====================
 
     async def save_session(self, telegram_id: int,
                            phone: str,
                            session_string: str = None):
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO user_sessions
-                (telegram_id, phone, session_string)
-                VALUES ($1, $2, $3)
-                ON CONFLICT DO NOTHING
-            """, telegram_id, phone, session_string)
+        await self.execute("""
+            INSERT OR IGNORE INTO user_sessions
+            (telegram_id, phone, session_string)
+            VALUES (?, ?, ?)
+        """, (telegram_id, phone, session_string))
 
     async def get_session(self, telegram_id: int):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow("""
-                SELECT * FROM user_sessions
-                WHERE telegram_id = $1
-                AND is_active = TRUE
-                ORDER BY created_at DESC LIMIT 1
-            """, telegram_id)
+        return await self.fetchone("""
+            SELECT * FROM user_sessions
+            WHERE telegram_id = ? AND is_active = 1
+            ORDER BY created_at DESC LIMIT 1
+        """, (telegram_id,))
 
     async def delete_session(self, telegram_id: int):
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                UPDATE user_sessions
-                SET is_active = FALSE
-                WHERE telegram_id = $1
-            """, telegram_id)
+        await self.execute(
+            "UPDATE user_sessions SET is_active = 0 WHERE telegram_id = ?",
+            (telegram_id,)
+        )
 
     # ==================== القنوات ====================
 
@@ -373,35 +407,29 @@ class Database:
                         chat_type: str,
                         chat_username: str = None,
                         members_count: int = 0):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow("""
-                INSERT INTO chats
-                (owner_id, chat_id, chat_title,
-                 chat_type, chat_username, members_count)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (owner_id, chat_id) DO UPDATE
-                SET chat_title = $3,
-                    members_count = $6,
-                    last_fetched = NOW()
-                RETURNING *
-            """, owner_id, chat_id, chat_title,
-                chat_type, chat_username, members_count)
+        await self.execute("""
+            INSERT INTO chats
+            (owner_id, chat_id, chat_title, chat_type,
+             chat_username, members_count)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(owner_id, chat_id) DO UPDATE SET
+            chat_title = excluded.chat_title,
+            members_count = excluded.members_count,
+            last_fetched = datetime('now')
+        """, (owner_id, chat_id, chat_title, chat_type,
+              chat_username, members_count))
 
     async def get_user_chats(self, owner_id: int,
                              chat_type: str = None):
-        async with self.pool.acquire() as conn:
-            if chat_type:
-                return await conn.fetch("""
-                    SELECT * FROM chats
-                    WHERE owner_id = $1
-                    AND chat_type = $2
-                    ORDER BY chat_title
-                """, owner_id, chat_type)
-            return await conn.fetch("""
-                SELECT * FROM chats
-                WHERE owner_id = $1
-                ORDER BY chat_title
-            """, owner_id)
+        if chat_type:
+            return await self.fetchall(
+                "SELECT * FROM chats WHERE owner_id = ? AND chat_type = ? ORDER BY chat_title",
+                (owner_id, chat_type)
+            )
+        return await self.fetchall(
+            "SELECT * FROM chats WHERE owner_id = ? ORDER BY chat_title",
+            (owner_id,)
+        )
 
     # ==================== الأرشيف ====================
 
@@ -410,60 +438,63 @@ class Database:
                              chat_title: str,
                              content_type: str,
                              settings: dict = None):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow("""
-                INSERT INTO archives
-                (owner_id, chat_id, chat_title,
-                 content_type, settings)
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING *
-            """, owner_id, chat_id, chat_title,
-                content_type,
-                json.dumps(settings or {}))
+        row_id = await self.insert("""
+            INSERT INTO archives
+            (owner_id, chat_id, chat_title,
+             content_type, settings)
+            VALUES (?, ?, ?, ?, ?)
+        """, (owner_id, chat_id, chat_title,
+              content_type,
+              json.dumps(settings or {})))
+        return await self.get_archive(row_id)
 
-    async def update_archive(self, archive_id: int,
-                             **kwargs):
-        fields = ", ".join(
-            [f"{k} = ${i+2}"
-             for i, k in enumerate(kwargs.keys())]
-        )
+    async def update_archive(self, archive_id: int, **kwargs):
+        # تحويل datetime لنص
+        for k, v in kwargs.items():
+            if isinstance(v, datetime):
+                kwargs[k] = dt_to_str(v)
+
+        fields = ", ".join([f"{k} = ?" for k in kwargs.keys()])
         values = list(kwargs.values())
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                f"UPDATE archives SET {fields} "
-                f"WHERE id = $1",
-                archive_id, *values
-            )
+        values.append(archive_id)
+        await self.execute(
+            f"UPDATE archives SET {fields} WHERE id = ?",
+            values
+        )
 
     async def get_archive(self, archive_id: int):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow(
-                "SELECT * FROM archives WHERE id = $1",
-                archive_id
-            )
+        return await self.fetchone(
+            "SELECT * FROM archives WHERE id = ?",
+            (archive_id,)
+        )
 
     async def get_user_archives(self, owner_id: int,
                                 limit: int = 20,
                                 offset: int = 0):
-        async with self.pool.acquire() as conn:
-            return await conn.fetch("""
-                SELECT * FROM archives
-                WHERE owner_id = $1
-                ORDER BY started_at DESC
-                LIMIT $2 OFFSET $3
-            """, owner_id, limit, offset)
+        rows = await self.fetchall("""
+            SELECT * FROM archives
+            WHERE owner_id = ?
+            ORDER BY started_at DESC
+            LIMIT ? OFFSET ?
+        """, (owner_id, limit, offset))
+
+        # تحويل النصوص لـ datetime
+        for row in rows:
+            if row.get("started_at"):
+                row["started_at"] = str_to_dt(
+                    row["started_at"]
+                )
+        return rows
 
     async def count_archives(self, owner_id: int = None):
-        async with self.pool.acquire() as conn:
-            if owner_id:
-                return await conn.fetchval(
-                    "SELECT COUNT(*) FROM archives "
-                    "WHERE owner_id = $1",
-                    owner_id
-                )
-            return await conn.fetchval(
-                "SELECT COUNT(*) FROM archives"
+        if owner_id:
+            return await self.fetchval(
+                "SELECT COUNT(*) FROM archives WHERE owner_id = ?",
+                (owner_id,)
             )
+        return await self.fetchval(
+            "SELECT COUNT(*) FROM archives"
+        )
 
     # ==================== الرسائل ====================
 
@@ -476,7 +507,7 @@ class Database:
                            file_size: int = 0,
                            file_name: str = None,
                            mime_type: str = None,
-                           date: datetime = None,
+                           date=None,
                            sender_id: int = None,
                            sender_name: str = None,
                            views: int = 0,
@@ -484,165 +515,164 @@ class Database:
                            ai_summary: str = None,
                            ai_category: str = None,
                            metadata: dict = None):
-        date = clean_datetime(date)
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow("""
-                INSERT INTO messages (
-                    archive_id, owner_id, chat_id,
-                    message_id, message_type, text,
-                    file_path, file_size, file_name,
-                    mime_type, date, sender_id,
-                    sender_name, views, forwards,
-                    ai_summary, ai_category, metadata
-                ) VALUES (
-                    $1,$2,$3,$4,$5,$6,$7,$8,$9,
-                    $10,$11,$12,$13,$14,$15,$16,$17,$18
-                )
-                ON CONFLICT (archive_id, message_id)
-                DO NOTHING
-                RETURNING *
-            """, archive_id, owner_id, chat_id,
+        date = dt_to_str(clean_datetime(date))
+
+        await self.execute("""
+            INSERT OR IGNORE INTO messages (
+                archive_id, owner_id, chat_id,
                 message_id, message_type, text,
                 file_path, file_size, file_name,
                 mime_type, date, sender_id,
                 sender_name, views, forwards,
-                ai_summary, ai_category,
-                json.dumps(metadata or {}))
+                ai_summary, ai_category, metadata
+            ) VALUES (
+                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+            )
+        """, (archive_id, owner_id, chat_id,
+              message_id, message_type, text,
+              file_path, file_size, file_name,
+              mime_type, date, sender_id,
+              sender_name, views, forwards,
+              ai_summary, ai_category,
+              json.dumps(metadata or {})))
 
     async def get_archive_messages(self,
                                    archive_id: int,
                                    message_type: str = None,
                                    limit: int = 50,
                                    offset: int = 0):
-        async with self.pool.acquire() as conn:
-            if message_type:
-                return await conn.fetch("""
-                    SELECT * FROM messages
-                    WHERE archive_id = $1
-                    AND message_type = $2
-                    ORDER BY date DESC
-                    LIMIT $3 OFFSET $4
-                """, archive_id, message_type,
-                    limit, offset)
-            return await conn.fetch("""
+        if message_type:
+            return await self.fetchall("""
                 SELECT * FROM messages
-                WHERE archive_id = $1
-                ORDER BY date DESC
-                LIMIT $2 OFFSET $3
-            """, archive_id, limit, offset)
+                WHERE archive_id = ? AND message_type = ?
+                ORDER BY date DESC LIMIT ? OFFSET ?
+            """, (archive_id, message_type, limit, offset))
+        return await self.fetchall("""
+            SELECT * FROM messages
+            WHERE archive_id = ?
+            ORDER BY date DESC LIMIT ? OFFSET ?
+        """, (archive_id, limit, offset))
 
     async def search_messages(self, owner_id: int,
                               query: str,
                               limit: int = 50):
-        async with self.pool.acquire() as conn:
-            return await conn.fetch("""
-                SELECT * FROM messages
-                WHERE owner_id = $1
-                AND text ILIKE $2
-                ORDER BY date DESC
-                LIMIT $3
-            """, owner_id, f"%{query}%", limit)
+        return await self.fetchall("""
+            SELECT * FROM messages
+            WHERE owner_id = ? AND text LIKE ?
+            ORDER BY date DESC LIMIT ?
+        """, (owner_id, f"%{query}%", limit))
 
     async def search_all_chats(self, owner_id: int,
                                query: str):
-        async with self.pool.acquire() as conn:
-            return await conn.fetch("""
-                SELECT m.*, a.chat_title
-                FROM messages m
-                JOIN archives a ON m.archive_id = a.id
-                WHERE m.owner_id = $1
-                AND m.text ILIKE $2
-                ORDER BY m.date DESC
-                LIMIT 100
-            """, owner_id, f"%{query}%")
+        return await self.fetchall("""
+            SELECT m.*, a.chat_title
+            FROM messages m
+            JOIN archives a ON m.archive_id = a.id
+            WHERE m.owner_id = ? AND m.text LIKE ?
+            ORDER BY m.date DESC LIMIT 100
+        """, (owner_id, f"%{query}%"))
 
     async def count_messages(self,
                              archive_id: int = None,
                              owner_id: int = None):
-        async with self.pool.acquire() as conn:
-            if archive_id:
-                return await conn.fetchval(
-                    "SELECT COUNT(*) FROM messages "
-                    "WHERE archive_id = $1",
-                    archive_id
-                )
-            if owner_id:
-                return await conn.fetchval(
-                    "SELECT COUNT(*) FROM messages "
-                    "WHERE owner_id = $1",
-                    owner_id
-                )
-            return await conn.fetchval(
-                "SELECT COUNT(*) FROM messages"
+        if archive_id:
+            return await self.fetchval(
+                "SELECT COUNT(*) FROM messages WHERE archive_id = ?",
+                (archive_id,)
             )
+        if owner_id:
+            return await self.fetchval(
+                "SELECT COUNT(*) FROM messages WHERE owner_id = ?",
+                (owner_id,)
+            )
+        return await self.fetchval(
+            "SELECT COUNT(*) FROM messages"
+        )
 
     # ==================== الإحصائيات ====================
 
     async def get_stats(self, owner_id: int = None):
-        async with self.pool.acquire() as conn:
-            if owner_id:
-                return await conn.fetchrow("""
-                    SELECT
-                        COUNT(DISTINCT a.id)
-                            as total_archives,
-                        COUNT(m.id)
-                            as total_messages,
-                        COALESCE(SUM(m.file_size), 0)
-                            as total_size,
-                        COUNT(CASE WHEN m.file_path
-                              IS NOT NULL THEN 1 END)
-                            as total_files
-                    FROM archives a
-                    LEFT JOIN messages m
-                        ON a.id = m.archive_id
-                    WHERE a.owner_id = $1
-                """, owner_id)
-            return await conn.fetchrow("""
+        if owner_id:
+            return await self.fetchone("""
                 SELECT
-                    COUNT(DISTINCT u.id)
-                        as total_users,
-                    COUNT(DISTINCT a.id)
-                        as total_archives,
-                    COUNT(m.id)
-                        as total_messages,
-                    COALESCE(SUM(m.file_size), 0)
-                        as total_size
-                FROM users u
-                LEFT JOIN archives a
-                    ON u.telegram_id = a.owner_id
-                LEFT JOIN messages m
-                    ON a.id = m.archive_id
-            """)
+                    COUNT(DISTINCT a.id) as total_archives,
+                    COUNT(m.id) as total_messages,
+                    COALESCE(SUM(m.file_size), 0) as total_size,
+                    COUNT(CASE WHEN m.file_path IS NOT NULL
+                          THEN 1 END) as total_files
+                FROM archives a
+                LEFT JOIN messages m ON a.id = m.archive_id
+                WHERE a.owner_id = ?
+            """, (owner_id,))
+        return await self.fetchone("""
+            SELECT
+                COUNT(DISTINCT u.id) as total_users,
+                COUNT(DISTINCT a.id) as total_archives,
+                COUNT(m.id) as total_messages,
+                COALESCE(SUM(m.file_size), 0) as total_size
+            FROM users u
+            LEFT JOIN archives a ON u.telegram_id = a.owner_id
+            LEFT JOIN messages m ON a.id = m.archive_id
+        """)
 
     async def log_activity(self, user_id: int,
                            action: str,
                            details: dict = None):
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO activity_log
-                (user_id, action, details)
-                VALUES ($1, $2, $3)
-            """, user_id, action,
-                json.dumps(details or {}))
+        await self.execute("""
+            INSERT INTO activity_log (user_id, action, details)
+            VALUES (?, ?, ?)
+        """, (user_id, action, json.dumps(details or {})))
 
     async def get_activity_log(self,
                                user_id: int = None,
                                limit: int = 50):
-        async with self.pool.acquire() as conn:
-            if user_id:
-                return await conn.fetch("""
-                    SELECT * FROM activity_log
-                    WHERE user_id = $1
-                    ORDER BY created_at DESC
-                    LIMIT $2
-                """, user_id, limit)
-            return await conn.fetch("""
+        if user_id:
+            rows = await self.fetchall("""
                 SELECT * FROM activity_log
-                ORDER BY created_at DESC
-                LIMIT $1
-            """, limit)
+                WHERE user_id = ?
+                ORDER BY created_at DESC LIMIT ?
+            """, (user_id, limit))
+        else:
+            rows = await self.fetchall("""
+                SELECT * FROM activity_log
+                ORDER BY created_at DESC LIMIT ?
+            """, (limit,))
+
+        for row in rows:
+            if row.get("created_at"):
+                row["created_at"] = str_to_dt(
+                    row["created_at"]
+                )
+        return rows
+
+    async def delete_archive_data(self, archive_id: int):
+        await self.execute(
+            "DELETE FROM messages WHERE archive_id = ?",
+            (archive_id,)
+        )
+        await self.execute(
+            "DELETE FROM archives WHERE id = ?",
+            (archive_id,)
+        )
 
 
 # ==================== Instance ====================
 
 db = Database()
+```
+
+---
+
+### وعدل `handlers/archive.py` - سطر واحد فقط
+
+**ابحث عن:**
+```python
+async with db.pool.acquire() as conn:
+    await conn.execute(
+        "DELETE FROM messages WHERE archive_id = $1",
+        archive_id
+    )
+    await conn.execute(
+        "DELETE FROM archives WHERE id = $1",
+        archive_id
+    )
