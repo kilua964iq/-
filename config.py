@@ -9,6 +9,7 @@ class Config:
     API_HASH = os.getenv("API_HASH", "")
     BOT_TOKEN = os.getenv("BOT_TOKEN", "")
     OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+    DATABASE_URL = os.getenv("DATABASE_URL", "")
 
     # ===== OpenAI =====
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
