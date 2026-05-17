@@ -569,4 +569,5 @@ def get_auth_handler() -> ConversationHandler:
             ),
         ],
         allow_reentry=True,
+        per_message=False,
     )
