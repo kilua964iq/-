@@ -274,20 +274,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
-
----
-
-## ملف `railway.json`
-
-```json
-{
-    "build": {
-        "builder": "NIXPACKS"
-    },
-    "deploy": {
-        "startCommand": "python main.py",
-        "restartPolicyType": "ON_FAILURE",
-        "restartPolicyMaxRetries": 10
-    }
-}
