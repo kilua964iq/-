@@ -1,3 +1,6 @@
+## `handlers/archive.py` الكامل المعدل
+
+```python
 import os
 from datetime import datetime
 from telegram import Update
@@ -322,7 +325,6 @@ async def _fetch_and_save(
             msg_type = msg_data["type"]
             stats    = msg_data["stats"]
 
-            # تجنب التكرار
             if options.get("no_duplicate") and message.text:
                 if message.text in seen_texts:
                     continue
@@ -332,7 +334,6 @@ async def _fetch_and_save(
             file_size = 0
             file_name = None
 
-            # تحميل الميديا
             if (message.media and
                     msg_type not in ["text", "stickers"]):
                 try:
@@ -355,7 +356,6 @@ async def _fetch_and_save(
             ai_summary  = None
             ai_category = None
 
-            # تحويل صوت لنص
             if (options.get("voice_to_text") and
                     msg_type in ["voice", "audio"] and
                     file_path):
@@ -370,7 +370,6 @@ async def _fetch_and_save(
                         e, "transcribe", user_id
                     )
 
-            # تلخيص AI
             if (options.get("ai_summary") and
                     message.text and
                     len(message.text) > 100):
@@ -383,21 +382,19 @@ async def _fetch_and_save(
                         e, "summarize", user_id
                     )
 
-            # تصنيف AI
             if (options.get("ai_category") and
                     message.text):
                 try:
                     cat = await ai_service.categorize_text(
                         message.text
                     )
-                    if cat:                    
-               ai_category = cat.get("category")
+                    if cat:
+                        ai_category = cat.get("category")
                 except Exception as e:
                     error_logger.log_exception(
                         e, "categorize", user_id
                     )
 
-            # حفظ النص للتصدير
             if message.text:
                 all_texts.append({
                     "text": message.text,
@@ -405,7 +402,6 @@ async def _fetch_and_save(
                     "id":   message.id,
                 })
 
-            # معلومات المرسل
             sender_name = None
             sender_id   = None
             if message.sender:
@@ -416,13 +412,11 @@ async def _fetch_and_save(
                     getattr(sender, "title", "") or ""
                 )
 
-            # تنظيف التاريخ
             date = message.date
             if (date and hasattr(date, 'tzinfo') and
                     date.tzinfo is not None):
                 date = date.replace(tzinfo=None)
 
-            # حفظ في قاعدة البيانات
             await db.save_message(
                 archive_id   = archive_id,
                 owner_id     = user_id,
@@ -446,7 +440,6 @@ async def _fetch_and_save(
                 ai_category  = ai_category,
             )
 
-            # تحديث التقدم
             now     = datetime.now()
             elapsed = (now - last_update).seconds
 
@@ -478,7 +471,6 @@ async def _fetch_and_save(
                 except Exception:
                     pass
 
-        # اكتملت العملية
         is_cancelled = context.user_data.get(
             "is_cancelled", False
         )
@@ -496,7 +488,6 @@ async def _fetch_and_save(
             completed_at     = datetime.now(),
         )
 
-        # تصدير TXT
         txt_path = None
         if options.get("save_txt") and all_texts:
             txt_path = await download_manager.export_messages_as_txt(
@@ -509,7 +500,6 @@ async def _fetch_and_save(
                 ),
             )
 
-        # رسالة الاكتمال
         status_text = (
             "⚠️ **تم إيقاف الجلب**"
             if is_cancelled else
@@ -535,7 +525,6 @@ async def _fetch_and_save(
                 parse_mode   = "Markdown"
             )
 
-        # إرسال ملف TXT
         if txt_path and os.path.exists(txt_path):
             with open(txt_path, "rb") as f:
                 await progress_msg.reply_document(
@@ -617,14 +606,13 @@ async def show_archives_callback(
         )
         return
 
-    archives_list = [dict(a) for a in archives]
-    context.user_data["archives_list"] = archives_list
+    context.user_data["archives_list"] = archives
 
     await query.message.reply_text(
-        f"📦 **أرشيفاتك** ({len(archives_list)})\n\n"
+        f"📦 **أرشيفاتك** ({len(archives)})\n\n"
         f"اختر أرشيف لعرض تفاصيله 👇",
         reply_markup=archives_list_keyboard(
-            archives_list, page=0
+            archives, page=0
         ),
         parse_mode="Markdown"
     )
@@ -675,8 +663,7 @@ async def view_archive_callback(
         )
         return
 
-    archive_dict = dict(archive)
-    msg_count    = await db.count_messages(
+    msg_count = await db.count_messages(
         archive_id=archive_id
     )
 
@@ -689,19 +676,19 @@ async def view_archive_callback(
     }
 
     content_name = config.CONTENT_TYPES.get(
-        archive_dict.get("content_type", ""),
+        archive.get("content_type", ""),
         "غير معروف"
     )
 
     msg = (
         f"📦 **تفاصيل الأرشيف**\n\n"
-        f"📢 القناة:    `{archive_dict.get('chat_title', '')}`\n"
+        f"📢 القناة:    `{archive.get('chat_title', '')}`\n"
         f"📌 النوع:     `{content_name}`\n"
         f"📊 الحالة:    "
-        f"{status_map.get(archive_dict.get('status', ''), '❓')}\n"
+        f"{status_map.get(archive.get('status', ''), '❓')}\n"
         f"💬 الرسائل:  `{format_number(msg_count)}`\n"
         f"📅 التاريخ:  "
-        f"`{format_date(archive_dict.get('started_at'))}`\n"
+        f"`{archive.get('started_at', '')}`\n"
     )
 
     await query.message.reply_text(
@@ -733,21 +720,19 @@ async def archive_action_callback(
         )
         return
 
-    archive_dict = dict(archive)
-
     if action == "stats":
         await _show_archive_stats(
-            query, archive_id, archive_dict, db
+            query, archive_id, archive, db
         )
 
     elif action == "txt":
         await _export_txt(
-            query, user_id, archive_id, archive_dict, db
+            query, user_id, archive_id, archive, db
         )
 
     elif action == "zip":
         await _export_zip(
-            query, user_id, archive_dict
+            query, user_id, archive
         )
 
     elif action == "extract":
@@ -760,7 +745,7 @@ async def archive_action_callback(
 
     elif action == "ai":
         await _analyze_ai(
-            query, user_id, archive_id, archive_dict, db
+            query, user_id, archive_id, archive, db
         )
 
     elif action == "delete":
@@ -828,13 +813,11 @@ async def _export_txt(
         limit=9999,
     )
 
-    messages_list = [dict(m) for m in messages]
-
     txt_path = await download_manager.export_messages_as_txt(
         owner_id   = user_id,
         archive_id = archive_id,
         chat_title = archive.get("chat_title", ""),
-        messages   = messages_list,
+        messages   = messages,
     )
 
     try:
@@ -849,7 +832,7 @@ async def _export_txt(
                 caption  = (
                     f"📄 **ملف النصوص**\n"
                     f"📢 {archive.get('chat_title', '')}\n"
-                    f"💬 {format_number(len(messages_list))} رسالة"
+                    f"💬 {format_number(len(messages))} رسالة"
                 ),
                 parse_mode="Markdown"
             )
@@ -892,7 +875,6 @@ async def _export_zip(query, user_id, archive):
         else:
             await query.message.reply_text(
                 f"✅ تم إنشاء الملف\n"
-                f"📍 المسار: `{zip_path}`\n"
                 f"💾 الحجم: `{format_size(zip_size)}`\n\n"
                 f"⚠️ الملف كبير للإرسال المباشر",
                 parse_mode="Markdown"
@@ -948,7 +930,6 @@ async def _analyze_ai(
         reply_markup=archive_keyboard(archive_id),
         parse_mode="Markdown"
     )
-
 
 async def _show_content(
         query, archive_id, content_type, db):
@@ -1012,7 +993,7 @@ def _extract_type_keyboard(archive_id: int):
         InlineKeyboardMarkup,
         InlineKeyboardButton,
     )
-    keyboard = [
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
                 "💳 أرقام البطاقات",
@@ -1045,8 +1026,7 @@ def _extract_type_keyboard(archive_id: int):
                 callback_data=f"view_archive_{archive_id}"
             ),
         ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    ])
 
 
 # ==================== استخراج ذكي ====================
@@ -1080,13 +1060,11 @@ async def extract_callback(
         limit=9999,
     )
 
-    messages_list = [dict(m) for m in messages]
-
     txt_path = await download_manager.extract_and_export(
         owner_id     = user_id,
         archive_id   = archive_id,
         chat_title   = archive["chat_title"],
-        messages     = messages_list,
+        messages     = messages,
         extract_type = extract_type,
     )
 
@@ -1144,15 +1122,7 @@ async def confirm_delete_archive_callback(
         chat_id  = archive["chat_id"],
     )
 
-    async with db.pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM messages WHERE archive_id = $1",
-            archive_id
-        )
-        await conn.execute(
-            "DELETE FROM archives WHERE id = $1",
-            archive_id
-        )
+    await db.delete_archive_data(archive_id)
 
     await query.message.reply_text(
         "✅ تم حذف الأرشيف بنجاح",
