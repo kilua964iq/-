@@ -1,6 +1,3 @@
-## `handlers/archive.py` الكامل المعدل
-
-```python
 import os
 from datetime import datetime
 from telegram import Update
