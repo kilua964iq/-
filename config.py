@@ -3,16 +3,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 class Config:
     # ===== تيليغرام =====
     API_ID = int(os.getenv("API_ID", "0"))
     API_HASH = os.getenv("API_HASH", "")
     BOT_TOKEN = os.getenv("BOT_TOKEN", "")
     OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+
+    # ===== قاعدة البيانات =====
     DATABASE_URL = os.getenv("DATABASE_URL", "")
 
     # ===== OpenAI =====
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+    # ===== المطور =====
+    DEVELOPER_NAME = "Mustafa"
+    DEVELOPER_USERNAME = "@o8380"
 
     # ===== مسارات =====
     DOWNLOAD_PATH = os.getenv("DOWNLOAD_PATH", "downloads")
@@ -63,6 +70,15 @@ class Config:
     # ===== حدود الجلب =====
     FETCH_LIMITS = [10, 50, 100, 500, 1000, 0]
 
+    # ===== إعدادات التصفية الذكية =====
+    SMART_FILTERS = {
+        "card_numbers":   True,
+        "phone_numbers":  True,
+        "emails":         True,
+        "urls":           True,
+        "clean_text":     True,
+    }
+
 
 config = Config()
 
@@ -79,6 +95,7 @@ def create_directories():
         f"{config.DOWNLOAD_PATH}/audio",
         f"{config.DOWNLOAD_PATH}/voice",
         f"{config.DOWNLOAD_PATH}/stickers",
+        f"{config.DOWNLOAD_PATH}/txt",
     ]
     for d in dirs:
         os.makedirs(d, exist_ok=True)
