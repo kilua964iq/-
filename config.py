@@ -18,42 +18,18 @@ class Config:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
     # ===== المطور =====
-    DEVELOPER_NAME = "Mustafa"
+    DEVELOPER_NAME     = "Mustafa"
     DEVELOPER_USERNAME = "@o8380"
 
     # ===== مسارات =====
     DOWNLOAD_PATH = os.getenv("DOWNLOAD_PATH", "downloads")
-    SESSION_PATH = os.getenv("SESSION_PATH", "sessions")
-    LOG_PATH = os.getenv("LOG_PATH", "logs")
+    SESSION_PATH  = os.getenv("SESSION_PATH", "sessions")
+    LOG_PATH      = os.getenv("LOG_PATH", "logs")
 
-    # ===== إعدادات البوت =====
-    MAX_DOWNLOAD_SIZE = int(os.getenv("MAX_DOWNLOAD_SIZE", "2000"))
+    # ===== إعدادات =====
+    MAX_DOWNLOAD_SIZE    = int(os.getenv("MAX_DOWNLOAD_SIZE", "2000"))
     MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "5"))
     FLOOD_SLEEP_THRESHOLD = int(os.getenv("FLOOD_SLEEP_THRESHOLD", "60"))
-
-    # ===== الأيقونات المضيئة =====
-    ICONS = {
-        "check":     "6023660820544623088",
-        "cross":     "6037570896766438989",
-        "fire":      "5999340396432333728",
-        "lightning": "6026367225466720832",
-        "diamond":   "6023660820544623088",
-        "rocket":    "6282977077427702833",
-        "stop":      "5420323339723881652",
-        "warning":   "5420323339723881652",
-        "note":      "6023660820544623088",
-        "chart":     "5971837723676249096",
-        "box":       "6066395745139824604",
-        "list":      "5974235702701853774",
-        "refresh":   "5971837723676249096",
-        "clock":     "5971837723676249096",
-        "globe":     "6026367225466720832",
-        "target":    "5974235702701853774",
-        "robot":     "6057466460886799210",
-        "admin":     "4949560993840629085",
-        "play":      "6285315214673975495",
-        "star":      "5971944878815317190",
-    }
 
     # ===== أنواع المحتوى =====
     CONTENT_TYPES = {
@@ -69,15 +45,6 @@ class Config:
 
     # ===== حدود الجلب =====
     FETCH_LIMITS = [10, 50, 100, 500, 1000, 0]
-
-    # ===== إعدادات التصفية الذكية =====
-    SMART_FILTERS = {
-        "card_numbers":   True,
-        "phone_numbers":  True,
-        "emails":         True,
-        "urls":           True,
-        "clean_text":     True,
-    }
 
 
 config = Config()
