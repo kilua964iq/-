@@ -1,4 +1,6 @@
+import os
 import asyncio
+import aiofiles
 from datetime import datetime
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
@@ -319,7 +321,6 @@ async def manage_admin_callback(
 
     query    = update.callback_query
     await query.answer()
-    user_id  = update.effective_user.id
 
     admin_id = int(
         query.data.replace("owner_admin_", "")
@@ -604,6 +605,161 @@ async def receive_broadcast(
     return ConversationHandler.END
 
 
+# ==================== البحث ====================
+
+async def search_callback(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    await query.message.reply_text(
+        "🔍 **البحث**\n\n"
+        "اختر نوع البحث 👇",
+        reply_markup=search_keyboard(),
+        parse_mode="Markdown"
+    )
+
+
+async def search_text_callback(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    await query.message.reply_text(
+        "🔤 **بحث بالنص**\n\n"
+        "أرسل الكلمة أو النص الذي تريد البحث عنه\n"
+        "سيتم البحث في كل قنواتك ومجموعاتك",
+        reply_markup=cancel_keyboard(),
+        parse_mode="Markdown"
+    )
+    return WAITING_SEARCH
+
+
+async def search_all_callback(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    await query.message.reply_text(
+        "🌐 **بحث عام في كل القنوات**\n\n"
+        "أرسل الكلمة أو النص الذي تريد البحث عنه",
+        reply_markup=cancel_keyboard(),
+        parse_mode="Markdown"
+    )
+    return WAITING_SEARCH
+
+
+async def receive_search(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE):
+    from database import db
+
+    user_id      = update.effective_user.id
+    search_query = update.message.text.strip()
+
+    wait_msg = await update.message.reply_text(
+        f"⏳ جاري البحث عن `{search_query}`...",
+        parse_mode="Markdown"
+    )
+
+    results = await db.search_all_chats(
+        owner_id = user_id,
+        query    = search_query,
+    )
+
+    try:
+        await wait_msg.delete()
+    except Exception:
+        pass
+
+    if not results:
+        await update.message.reply_text(
+            f"❌ لم يتم العثور على نتائج لـ\n"
+            f"`{search_query}`\n\n"
+            f"💡 تأكد أنك أرشفت القناة أولاً",
+            reply_markup=main_menu_keyboard(
+                is_logged_in=True
+            ),
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+
+    # حفظ النتائج كـ TXT
+    folder = os.path.join(
+        config.DOWNLOAD_PATH, "txt", str(user_id)
+    )
+    os.makedirs(folder, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_name = f"search_{timestamp}.txt"
+    file_path = os.path.join(folder, file_name)
+
+    content = (
+        f"{'=' * 50}\n"
+        f"نتائج البحث عن: {search_query}\n"
+        f"عدد النتائج: {len(results)}\n"
+        f"التاريخ: "
+        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"{'=' * 50}\n\n"
+    )
+
+    for i, result in enumerate(results, 1):
+        chat_title = result.get("chat_title", "")
+        text       = result.get("text", "") or ""
+        date       = result.get("date", "")
+
+        content += (
+            f"[{i}]\n"
+            f"📢 القناة: {chat_title}\n"
+            f"📅 التاريخ: {date}\n"
+            f"💬 النص:\n{text}\n"
+            f"{'─' * 40}\n"
+        )
+
+    async with aiofiles.open(
+        file_path, "w", encoding="utf-8"
+    ) as f:
+        await f.write(content)
+
+    # إرسال ملخص
+    preview = ""
+    for i, r in enumerate(results[:5], 1):
+        text = (r.get("text", "") or "")[:80]
+        chat = r.get("chat_title", "")
+        preview += (
+            f"{i}. 📢 `{chat}`\n"
+            f"{text}...\n\n"
+        )
+
+    await update.message.reply_text(
+        f"✅ **نتائج البحث عن:** `{search_query}`\n\n"
+        f"📊 عدد النتائج: `{len(results)}`\n\n"
+        f"**أول 5 نتائج:**\n\n"
+        f"{preview}",
+        parse_mode="Markdown"
+    )
+
+    # إرسال ملف TXT
+    if os.path.exists(file_path):
+        with open(file_path, "rb") as f:
+            await update.message.reply_document(
+                document = f,
+                caption  = (
+                    f"🔍 نتائج البحث عن: {search_query}\n"
+                    f"📊 {len(results)} نتيجة"
+                )
+            )
+
+    activity_logger.log_search(
+        user_id, search_query, len(results)
+    )
+
+    return ConversationHandler.END
+
+
 # ==================== السجلات ====================
 
 async def view_logs_callback(
@@ -613,7 +769,6 @@ async def view_logs_callback(
 
     query   = update.callback_query
     await query.answer()
-    user_id = update.effective_user.id
 
     logs = await db.get_activity_log(limit=20)
 
@@ -648,9 +803,8 @@ async def owner_stats_callback(
 
     query   = update.callback_query
     await query.answer()
-    user_id = update.effective_user.id
 
-    stats       = await db.get_stats()
+    stats = await db.get_stats()
     from services.queue_service import queue_service
     queue_stats = queue_service.get_queue_stats()
 
@@ -720,140 +874,8 @@ async def confirm_restart_callback(
         user_id, "RESTART"
     )
 
-    import os
     import sys
     os.execv(sys.executable, ["python"] + sys.argv)
-
-
-# ==================== البحث ====================
-
-async def search_callback(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    await query.message.reply_text(
-        "🔍 **البحث**\n\n"
-        "اختر نوع البحث 👇",
-        reply_markup=search_keyboard(),
-        parse_mode="Markdown"
-    )
-
-
-async def search_all_callback(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    await query.message.reply_text(
-        "🔍 **بحث في كل القنوات**\n\n"
-        "أرسل الكلمة التي تريد البحث عنها",
-        reply_markup=cancel_keyboard(),
-        parse_mode="Markdown"
-    )
-    return WAITING_SEARCH
-
-
-async def receive_search(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE):
-    from database import db
-    import aiofiles
-
-    user_id = update.effective_user.id
-    query   = update.message.text.strip()
-
-    wait_msg = await update.message.reply_text(
-        f"⏳ جاري البحث عن `{query}`...",
-        parse_mode="Markdown"
-    )
-
-    results = await db.search_all_chats(
-        owner_id=user_id,
-        query=query,
-    )
-
-    try:
-        await wait_msg.delete()
-    except Exception:
-        pass
-
-    if not results:
-        await update.message.reply_text(
-            f"❌ لم يتم العثور على نتائج لـ `{query}`",
-            reply_markup=main_menu_keyboard(
-                is_logged_in=True
-            ),
-            parse_mode="Markdown"
-        )
-        return ConversationHandler.END
-
-    # حفظ كـ TXT
-    import os
-    from config import config
-
-    folder = os.path.join(
-        config.DOWNLOAD_PATH, "txt", str(user_id)
-    )
-    os.makedirs(folder, exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_name = f"search_{query}_{timestamp}.txt"
-    file_path = os.path.join(folder, file_name)
-
-    content = (
-        f"{'=' * 50}\n"
-        f"نتائج البحث عن: {query}\n"
-        f"عدد النتائج: {len(results)}\n"
-        f"{'=' * 50}\n\n"
-    )
-
-    for i, result in enumerate(results, 1):
-        chat_title = result.get("chat_title", "")
-        text       = result.get("text", "") or ""
-        date       = result.get("date", "")
-
-        content += (
-            f"[{i}] 📢 {chat_title}\n"
-            f"📅 {date}\n"
-            f"{text[:500]}\n"
-            f"{'─' * 40}\n"
-        )
-
-    async with aiofiles.open(
-        file_path, "w", encoding="utf-8"
-    ) as f:
-        await f.write(content)
-
-    await update.message.reply_text(
-        f"✅ **نتائج البحث عن:** `{query}`\n\n"
-        f"📊 عدد النتائج: `{len(results)}`\n\n"
-        f"**أول 5 نتائج:**\n\n" +
-        "\n".join([
-            f"📢 `{r.get('chat_title', '')}` - "
-            f"{(r.get('text', '') or '')[:100]}..."
-            for r in results[:5]
-        ]),
-        parse_mode="Markdown"
-    )
-
-    if os.path.exists(file_path):
-        with open(file_path, "rb") as f:
-            await update.message.reply_document(
-                document = f,
-                caption  = (
-                    f"🔍 نتائج البحث عن: {query}\n"
-                    f"📊 {len(results)} نتيجة"
-                )
-            )
-
-    activity_logger.log_search(
-        user_id, query, len(results)
-    )
-
-    return ConversationHandler.END
 
 
 # ==================== الإعدادات ====================
@@ -899,6 +921,7 @@ async def toggle_setting_callback(
 
     status = "✅ مفعل" if new_value else "❌ معطل"
     await query.answer(status, show_alert=False)
+
 
     updated      = await db.get_settings(user_id)
     updated_dict = dict(updated) if updated else {}
@@ -948,6 +971,10 @@ def get_admin_handler() -> ConversationHandler:
                 pattern="^owner_broadcast$|^admin_broadcast$"
             ),
             CallbackQueryHandler(
+                search_text_callback,
+                pattern="^search_text$"
+            ),
+            CallbackQueryHandler(
                 search_all_callback,
                 pattern="^search_all$"
             ),
@@ -978,7 +1005,8 @@ def get_admin_handler() -> ConversationHandler:
                 pattern="^owner_panel$"
             ),
         ],
-        allow_reentry=True,
+        allow_reentry = True,
+        per_message   = False,
     )
 
 
