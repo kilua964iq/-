@@ -7,10 +7,7 @@ from config import config
 from utils.logger import bot_logger, error_logger
 
 
-# ==================== خدمة الذكاء الاصطناعي ====================
-
 class AIService:
-    """خدمة الذكاء الاصطناعي الكاملة"""
 
     def __init__(self):
         self.client = AsyncOpenAI(
@@ -25,7 +22,6 @@ class AIService:
             self,
             text: str,
             max_length: int = 200) -> Optional[str]:
-        """تلخيص نص"""
         try:
             if not text or len(text) < 50:
                 return text
@@ -53,9 +49,7 @@ class AIService:
                 temperature=0.3,
             )
 
-            summary = response.choices[0].message.content
-            bot_logger.debug("✅ تم تلخيص نص")
-            return summary
+            return response.choices[0].message.content
 
         except Exception as e:
             error_logger.log_exception(
@@ -63,29 +57,11 @@ class AIService:
             )
             return None
 
-    async def summarize_batch(
-            self,
-            texts: List[str],
-            progress_callback=None) -> List[Optional[str]]:
-        """تلخيص مجموعة نصوص"""
-        results = []
-        for i, text in enumerate(texts):
-            summary = await self.summarize_text(text)
-            results.append(summary)
-
-            if progress_callback:
-                await progress_callback(i + 1, len(texts))
-
-            await asyncio.sleep(0.5)
-
-        return results
-
     # ==================== تصنيف ====================
 
     async def categorize_text(
             self,
             text: str) -> Optional[dict]:
-        """تصنيف نص تلقائياً"""
         try:
             if not text or len(text) < 10:
                 return {
@@ -128,10 +104,9 @@ class AIService:
                 response_format={"type": "json_object"},
             )
 
-            result = json.loads(
+            return json.loads(
                 response.choices[0].message.content
             )
-            return result
 
         except Exception as e:
             error_logger.log_exception(
@@ -145,7 +120,6 @@ class AIService:
             self,
             file_path: str,
             language: str = "ar") -> Optional[str]:
-        """تحويل ملف صوتي لنص"""
         try:
             if not os.path.exists(file_path):
                 return None
@@ -158,9 +132,6 @@ class AIService:
                     response_format="text",
                 )
 
-            bot_logger.debug(
-                f"✅ تم تحويل الصوت: {file_path}"
-            )
             return response
 
         except Exception as e:
@@ -169,34 +140,11 @@ class AIService:
             )
             return None
 
-    async def transcribe_batch(
-            self,
-            file_paths: List[str],
-            language: str = "ar",
-            progress_callback=None) -> List[Optional[str]]:
-        """تحويل مجموعة ملفات صوتية"""
-        results = []
-        for i, file_path in enumerate(file_paths):
-            text = await self.transcribe_audio(
-                file_path, language
-            )
-            results.append(text)
-
-            if progress_callback:
-                await progress_callback(
-                    i + 1, len(file_paths)
-                )
-
-            await asyncio.sleep(0.3)
-
-        return results
-
     # ==================== تحليل صور ====================
 
     async def analyze_image(
             self,
             image_path: str) -> Optional[dict]:
-        """تحليل محتوى صورة"""
         try:
             if not os.path.exists(image_path):
                 return None
@@ -252,10 +200,9 @@ class AIService:
                 response_format={"type": "json_object"},
             )
 
-            result = json.loads(
+            return json.loads(
                 response.choices[0].message.content
             )
-            return result
 
         except Exception as e:
             error_logger.log_exception(
@@ -263,124 +210,12 @@ class AIService:
             )
             return None
 
-    # ==================== كشف التكرار ====================
-
-    async def get_embedding(
-            self,
-            text: str) -> Optional[List[float]]:
-        """استخراج embedding للنص"""
-        try:
-            if not text:
-                return None
-
-            response = await self.client.embeddings.create(
-                model="text-embedding-3-small",
-                input=text[:8000],
-            )
-            return response.data[0].embedding
-
-        except Exception as e:
-            error_logger.log_exception(
-                e, "get_embedding"
-            )
-            return None
-
-    def calculate_similarity(
-            self,
-            emb1: List[float],
-            emb2: List[float]) -> float:
-        """حساب التشابه بين نصين"""
-        try:
-            import math
-            dot = sum(
-                a * b for a, b in zip(emb1, emb2)
-            )
-            mag1 = math.sqrt(sum(a**2 for a in emb1))
-            mag2 = math.sqrt(sum(b**2 for b in emb2))
-
-            if mag1 == 0 or mag2 == 0:
-                return 0.0
-
-            return dot / (mag1 * mag2)
-
-        except Exception:
-            return 0.0
-
-    async def is_duplicate(
-            self,
-            text1: str,
-            text2: str,
-            threshold: float = 0.95) -> bool:
-        """كشف التكرار"""
-        try:
-            if text1 == text2:
-                return True
-
-            emb1 = await self.get_embedding(text1)
-            emb2 = await self.get_embedding(text2)
-
-            if not emb1 or not emb2:
-                return False
-
-            similarity = self.calculate_similarity(
-                emb1, emb2
-            )
-            return similarity >= threshold
-
-        except Exception as e:
-            error_logger.log_exception(
-                e, "is_duplicate"
-            )
-            return False
-
-    # ==================== تحليل شامل ====================
-
-    async def analyze_content(
-            self,
-            text: str,
-            include_summary: bool = True,
-            include_category: bool = True) -> dict:
-        """تحليل شامل للمحتوى"""
-        result = {
-            "summary":  None,
-            "category": None,
-            "keywords": [],
-        }
-
-        if include_summary and text:
-            try:
-                result["summary"] = (
-                    await self.summarize_text(text)
-                )
-            except Exception as e:
-                error_logger.log_exception(
-                    e, "analyze_content_summary"
-                )
-
-        if include_category and text:
-            try:
-                cat = await self.categorize_text(text)
-                if cat:
-                    result["category"] = cat.get(
-                        "category"
-                    )
-                    result["keywords"] = cat.get(
-                        "keywords", []
-                    )
-            except Exception as e:
-                error_logger.log_exception(
-                    e, "analyze_content_category"
-                )
-
-        return result
-
     # ==================== تقرير ====================
 
     async def generate_report(
             self,
             stats: dict,
             chat_name: str) -> Optional[str]:
-        """توليد تقرير تحليلي"""
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -417,10 +252,7 @@ class AIService:
             )
             return None
 
-    # ==================== فحص الخدمة ====================
-
     async def check_service(self) -> bool:
-        """التحقق من عمل الخدمة"""
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
