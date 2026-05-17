@@ -6,8 +6,6 @@ from config import config
 from utils.logger import bot_logger, error_logger
 
 
-# ==================== حالات المهمة ====================
-
 class TaskStatus(Enum):
     PENDING   = "pending"
     RUNNING   = "running"
@@ -24,11 +22,7 @@ class TaskPriority(Enum):
     URGENT = 3
 
 
-# ==================== المهمة ====================
-
 class Task:
-    """تمثيل مهمة واحدة"""
-
     def __init__(
             self,
             task_id: int,
@@ -75,10 +69,7 @@ class Task:
         }
 
 
-# ==================== الطابور ====================
-
 class QueueService:
-    """نظام طابور المهام الكامل"""
 
     def __init__(self):
         self._tasks: Dict[int, Task]       = {}
@@ -96,10 +87,7 @@ class QueueService:
         }
         self._task_counter = 0
 
-    # ==================== تشغيل ====================
-
     async def start(self, num_workers: int = None):
-        """تشغيل الطابور"""
         if self._running:
             return
 
@@ -114,28 +102,18 @@ class QueueService:
             )
             self._workers.append(worker)
 
-        bot_logger.info(
-            f"✅ تم تشغيل الطابور بـ {num_workers} عمال"
-        )
         print(
             f"✅ تم تشغيل الطابور بـ {num_workers} عمال",
             flush=True
         )
 
     async def stop(self):
-        """إيقاف الطابور"""
         self._running = False
-
         for worker in self._workers:
             worker.cancel()
-
         self._workers.clear()
-        bot_logger.info("⛔ تم إيقاف الطابور")
 
     async def _worker(self, worker_name: str):
-        """عامل معالجة المهام"""
-        bot_logger.debug(f"🔄 {worker_name} جاهز")
-
         while self._running:
             try:
                 priority, task_id = await asyncio.wait_for(
@@ -169,14 +147,8 @@ class QueueService:
             self,
             task: Task,
             worker_name: str):
-        """تنفيذ مهمة"""
         task.status     = TaskStatus.RUNNING
         task.started_at = datetime.now()
-
-        bot_logger.info(
-            f"▶️ {worker_name} يعالج مهمة "
-            f"{task.task_id} ({task.task_type})"
-        )
 
         await self._trigger_callback("on_start", task)
 
@@ -194,9 +166,6 @@ class QueueService:
                 task.progress     = 100
                 task.completed_at = datetime.now()
 
-                bot_logger.info(
-                    f"✅ مهمة {task.task_id} مكتملة"
-                )
                 await self._trigger_callback(
                     "on_complete", task
                 )
@@ -220,8 +189,6 @@ class QueueService:
                 "on_error", task
             )
 
-    # ==================== إدارة المهام ====================
-
     async def add_task(
             self,
             owner_id: int,
@@ -229,7 +196,6 @@ class QueueService:
             coroutine,
             priority: TaskPriority = TaskPriority.NORMAL,
             data: dict = None) -> Task:
-        """إضافة مهمة للطابور"""
 
         self._task_counter += 1
         task = Task(
@@ -247,16 +213,10 @@ class QueueService:
             (-priority.value, task.task_id)
         )
 
-        bot_logger.info(
-            f"➕ مهمة جديدة {task.task_id} "
-            f"({task_type}) للمستخدم {owner_id}"
-        )
-
         return task
 
     async def cancel_task(
             self, task_id: int) -> bool:
-        """إلغاء مهمة"""
         task = self._tasks.get(task_id)
         if not task:
             return False
@@ -268,12 +228,10 @@ class QueueService:
         else:
             task.status = TaskStatus.CANCELLED
 
-        bot_logger.info(f"❌ تم إلغاء مهمة {task_id}")
         return True
 
     async def pause_task(
             self, task_id: int) -> bool:
-        """إيقاف مهمة مؤقتاً"""
         task = self._tasks.get(task_id)
         if not task:
             return False
@@ -281,16 +239,12 @@ class QueueService:
         if task.status == TaskStatus.RUNNING:
             task.status = TaskStatus.PAUSED
             task._pause_event.clear()
-            bot_logger.info(
-                f"⏸️ تم إيقاف مهمة {task_id} مؤقتاً"
-            )
             return True
 
         return False
 
     async def resume_task(
             self, task_id: int) -> bool:
-        """استكمال مهمة موقوفة"""
         task = self._tasks.get(task_id)
         if not task:
             return False
@@ -298,16 +252,12 @@ class QueueService:
         if task.status == TaskStatus.PAUSED:
             task.status = TaskStatus.RUNNING
             task._pause_event.set()
-            bot_logger.info(
-                f"▶️ تم استكمال مهمة {task_id}"
-            )
             return True
 
         return False
 
     async def retry_task(
             self, task_id: int) -> bool:
-        """إعادة محاولة مهمة فاشلة"""
         task = self._tasks.get(task_id)
         if not task:
             return False
@@ -320,35 +270,24 @@ class QueueService:
             await self._queue.put(
                 (-task.priority.value, task.task_id)
             )
-
-            bot_logger.info(
-                f"🔄 إعادة محاولة مهمة {task_id}"
-            )
             return True
 
         return False
 
     def update_progress(
-            self,
-            task_id: int,
-            progress: int):
-        """تحديث تقدم مهمة"""
+            self, task_id: int, progress: int):
         task = self._tasks.get(task_id)
         if task:
             task.progress = min(max(progress, 0), 100)
 
-    # ==================== استعلامات ====================
-
     def get_task(
-            self,
-            task_id: int) -> Optional[Task]:
+            self, task_id: int) -> Optional[Task]:
         return self._tasks.get(task_id)
 
     def get_user_tasks(
             self,
             owner_id: int,
             status: TaskStatus = None) -> list:
-        """جلب مهام مستخدم"""
         tasks = [
             t for t in self._tasks.values()
             if t.owner_id == owner_id
@@ -367,7 +306,6 @@ class QueueService:
     def get_active_tasks(
             self,
             owner_id: int = None) -> list:
-        """جلب المهام النشطة"""
         active = [
             TaskStatus.PENDING,
             TaskStatus.RUNNING,
@@ -385,7 +323,6 @@ class QueueService:
         return tasks
 
     def get_queue_stats(self) -> dict:
-        """إحصائيات الطابور"""
         all_tasks = list(self._tasks.values())
         return {
             "total":      len(all_tasks),
@@ -417,13 +354,8 @@ class QueueService:
             "queue_size": self._queue.qsize(),
         }
 
-    # ==================== Callbacks ====================
-
     def on_start(self, callback: Callable):
         self._callbacks["on_start"].append(callback)
-
-    def on_progress(self, callback: Callable):
-        self._callbacks["on_progress"].append(callback)
 
     def on_complete(self, callback: Callable):
         self._callbacks["on_complete"].append(callback)
@@ -435,10 +367,7 @@ class QueueService:
         self._callbacks["on_cancel"].append(callback)
 
     async def _trigger_callback(
-            self,
-            event: str,
-            task: Task):
-        """تشغيل callbacks"""
+            self, event: str, task: Task):
         for callback in self._callbacks.get(event, []):
             try:
                 if asyncio.iscoroutinefunction(callback):
@@ -450,11 +379,8 @@ class QueueService:
                     e, f"callback_{event}"
                 )
 
-    # ==================== تنظيف ====================
-
     def cleanup_completed(
             self, keep_last: int = 100):
-        """تنظيف المهام القديمة"""
         completed = [
             t for t in self._tasks.values()
             if t.status in [
@@ -471,11 +397,6 @@ class QueueService:
         to_remove = completed[:-keep_last]
         for task in to_remove:
             del self._tasks[task.task_id]
-
-        if to_remove:
-            bot_logger.debug(
-                f"🗑️ تم حذف {len(to_remove)} مهمة قديمة"
-            )
 
 
 # ==================== Instance ====================
