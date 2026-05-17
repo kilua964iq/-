@@ -4,8 +4,6 @@ from typing import Optional, AsyncGenerator
 from telethon import TelegramClient
 from telethon.tl.types import (
     Channel, Chat, User,
-    MessageMediaPhoto,
-    MessageMediaDocument,
 )
 from telethon.errors import (
     FloodWaitError,
@@ -30,11 +28,7 @@ from utils.helpers import (
 )
 
 
-# ==================== إدارة العملاء ====================
-
 class ClientManager:
-    """إدارة عملاء Telethon لكل مستخدم"""
-
     def __init__(self):
         self._clients = {}
 
@@ -47,7 +41,6 @@ class ClientManager:
 
     async def get_client(
             self, user_id: int) -> TelegramClient:
-        """الحصول على client أو إنشاء جديد"""
         if user_id in self._clients:
             client = self._clients[user_id]
             if client.is_connected():
@@ -70,16 +63,13 @@ class ClientManager:
         return client
 
     async def disconnect_client(self, user_id: int):
-        """قطع اتصال client"""
         if user_id in self._clients:
             client = self._clients[user_id]
             if client.is_connected():
                 await client.disconnect()
             del self._clients[user_id]
 
-    async def is_authorized(
-            self, user_id: int) -> bool:
-        """التحقق من تسجيل الدخول"""
+    async def is_authorized(self, user_id: int) -> bool:
         try:
             client = await self.get_client(user_id)
             return await client.is_user_authorized()
@@ -87,32 +77,21 @@ class ClientManager:
             return False
 
     async def disconnect_all(self):
-        """قطع كل الاتصالات"""
         for user_id in list(self._clients.keys()):
             await self.disconnect_client(user_id)
 
 
-# ==================== خدمة تيليغرام ====================
-
 class TelegramService:
-    """خدمة تيليغرام الكاملة"""
-
     def __init__(self):
         self.manager = ClientManager()
 
     # ==================== تسجيل الدخول ====================
 
-    async def send_code(
-            self,
-            user_id: int,
-            phone: str) -> dict:
-        """إرسال كود التحقق"""
+    async def send_code(self, user_id: int,
+                        phone: str) -> dict:
         try:
             client = await self.manager.get_client(user_id)
             result = await client.send_code_request(phone)
-            bot_logger.info(
-                f"✅ تم إرسال الكود للمستخدم {user_id}"
-            )
             return {
                 "success": True,
                 "phone_code_hash": result.phone_code_hash
@@ -141,13 +120,9 @@ class TelegramService:
                 "message": str(e)
             }
 
-    async def sign_in(
-            self,
-            user_id: int,
-            phone: str,
-            code: str,
-            phone_code_hash: str) -> dict:
-        """تسجيل الدخول بالكود"""
+    async def sign_in(self, user_id: int, phone: str,
+                      code: str,
+                      phone_code_hash: str) -> dict:
         try:
             client = await self.manager.get_client(user_id)
             user = await client.sign_in(
@@ -192,11 +167,8 @@ class TelegramService:
                 "message": str(e)
             }
 
-    async def sign_in_password(
-            self,
-            user_id: int,
-            password: str) -> dict:
-        """تسجيل الدخول بكلمة المرور الثنائية"""
+    async def sign_in_password(self, user_id: int,
+                               password: str) -> dict:
         try:
             client = await self.manager.get_client(user_id)
             user = await client.sign_in(password=password)
@@ -212,7 +184,6 @@ class TelegramService:
             }
 
     async def logout(self, user_id: int) -> bool:
-        """تسجيل الخروج"""
         try:
             client = await self.manager.get_client(user_id)
             await client.log_out()
@@ -233,9 +204,8 @@ class TelegramService:
             )
             return False
 
-    async def get_me(
-            self, user_id: int) -> Optional[dict]:
-        """معلومات الحساب الحالي"""
+    async def get_me(self,
+                     user_id: int) -> Optional[dict]:
         try:
             client = await self.manager.get_client(user_id)
             me = await client.get_me()
@@ -258,9 +228,7 @@ class TelegramService:
 
     # ==================== جلب القنوات ====================
 
-    async def get_dialogs(
-            self, user_id: int) -> dict:
-        """جلب كل القنوات والمجموعات"""
+    async def get_dialogs(self, user_id: int) -> dict:
         try:
             client = await self.manager.get_client(user_id)
             dialogs = await client.get_dialogs()
@@ -315,10 +283,8 @@ class TelegramService:
             }
 
     async def get_entity_by_username(
-            self,
-            user_id: int,
+            self, user_id: int,
             username: str) -> Optional[dict]:
-        """جلب قناة بالـ username"""
         try:
             client = await self.manager.get_client(user_id)
             entity    = await client.get_entity(username)
@@ -351,31 +317,26 @@ class TelegramService:
             entity,
             content_type: str = "all",
             limit: int = 100,
-            offset_date=None,
-            offset_id: int = 0,
             progress_callback=None) -> AsyncGenerator:
-        """جلب الرسائل مع معالجة FloodWait"""
 
         client  = await self.manager.get_client(user_id)
         fetched = 0
         stats   = {
-            "text":       0,
-            "photos":     0,
-            "videos":     0,
-            "files":      0,
-            "audio":      0,
-            "voice":      0,
-            "stickers":   0,
-            "total":      0,
+            "text":     0,
+            "photos":   0,
+            "videos":   0,
+            "files":    0,
+            "audio":    0,
+            "voice":    0,
+            "stickers": 0,
+            "total":    0,
         }
 
         try:
             async for message in client.iter_messages(
                 entity,
-                limit      = limit if limit > 0 else None,
-                offset_date = offset_date,
-                offset_id   = offset_id,
-                reverse     = False,
+                limit   = limit if limit > 0 else None,
+                reverse = False,
             ):
                 if not message or not message.id:
                     continue
@@ -408,10 +369,6 @@ class TelegramService:
 
         except FloodWaitError as e:
             error_logger.log_flood_wait(e.seconds, user_id)
-            bot_logger.warning(
-                f"⚠️ FloodWait {e.seconds}s "
-                f"للمستخدم {user_id}"
-            )
             await asyncio.sleep(e.seconds)
 
         except Exception as e:
@@ -426,44 +383,12 @@ class TelegramService:
             fetched
         )
 
-    async def count_messages(
-            self,
-            user_id: int,
-            entity,
-            content_type: str = "all") -> int:
-        """حساب عدد الرسائل"""
-        try:
-            client = await self.manager.get_client(user_id)
-
-            if content_type == "all":
-                count = await client.get_messages(
-                    entity, limit=0
-                )
-                return count.total
-
-            count = 0
-            async for msg in client.iter_messages(
-                entity, limit=None
-            ):
-                if classify_message(msg) == content_type:
-                    count += 1
-            return count
-
-        except Exception as e:
-            error_logger.log_exception(
-                e, "count_messages", user_id
-            )
-            return 0
-
-    # ==================== تحميل الملفات ====================
-
     async def download_media(
             self,
             user_id: int,
             message,
             msg_type: str,
             chat_id: int) -> Optional[str]:
-        """تحميل ملف من رسالة"""
         try:
             if not message.media:
                 return None
@@ -478,14 +403,10 @@ class TelegramService:
                 return file_path
 
             downloaded = await client.download_media(
-                message,
-                file=file_path,
+                message, file=file_path,
             )
 
-            if downloaded:
-                return downloaded
-
-            return None
+            return downloaded if downloaded else None
 
         except FloodWaitError as e:
             error_logger.log_flood_wait(e.seconds, user_id)
@@ -498,13 +419,9 @@ class TelegramService:
             )
             return None
 
-    # ==================== معلومات القناة ====================
-
     async def get_chat_info(
-            self,
-            user_id: int,
+            self, user_id: int,
             entity) -> Optional[dict]:
-        """معلومات تفصيلية عن قناة"""
         try:
             client = await self.manager.get_client(user_id)
             full   = await client.get_entity(entity)
